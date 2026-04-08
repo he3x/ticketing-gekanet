@@ -8,3 +8,4 @@ db.json
 *.log
 .env*
 !.env.example
+db.json
