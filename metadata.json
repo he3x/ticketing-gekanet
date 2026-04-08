@@ -1,0 +1,5 @@
+{
+  "name": "WiFi Ticketing System",
+  "description": "A comprehensive ticketing system for WiFi technicians, featuring multi-level user roles, installation and maintenance tracking, and WhatsApp integration via Fonnte API.",
+  "requestFramePermissions": []
+}
