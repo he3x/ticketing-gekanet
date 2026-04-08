@@ -22,12 +22,28 @@ import {
   FileText,
   Paperclip,
   Download,
-  Router,
-  Hash,
   Trash2,
   Eye,
-  EyeOff
+  EyeOff,
+  Map as MapIcon,
+  List,
+  Layers,
+  RefreshCw,
+  Loader2,
+  CheckCircle
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// Fix Leaflet default icon issue
+// @ts-ignore
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, differenceInMinutes, subMonths } from 'date-fns';
 import * as XLSX from 'xlsx';
@@ -104,10 +120,14 @@ export default function App() {
 
   useEffect(() => {
     const savedUser = localStorage.getItem('wifi_user');
+    let currentUser = null;
     if (savedUser) {
-      setUser(JSON.parse(savedUser));
+      currentUser = JSON.parse(savedUser);
+      setUser(currentUser);
     }
-    fetchData();
+    if (currentUser) {
+      fetchData(currentUser);
+    }
 
     // Check for ticketId in URL
     const params = new URLSearchParams(window.location.search);
@@ -116,27 +136,41 @@ export default function App() {
     }
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = async (currentUser?: User | null) => {
+    const activeUser = currentUser || user;
+    if (!activeUser) return;
+
     try {
-      const [tRes, uRes, sRes] = await Promise.all([
-        fetch('/api/tickets'),
-        fetch('/api/users'),
-        fetch('/api/settings')
-      ]);
+      const endpoints = ['/api/tickets'];
+
+      // Only superuser can fetch full user list and settings
+      if (activeUser?.role === 'superuser') {
+        endpoints.push('/api/users');
+        endpoints.push('/api/settings');
+      } else {
+        // Others only get the basic technician list for name resolution
+        endpoints.push('/api/technicians');
+      }
+
+      const responses = await Promise.all(endpoints.map(url => fetch(url)));
 
       const checkRes = async (res: Response) => {
         const contentType = res.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
-          const text = await res.text();
-          console.error(`Expected JSON but got ${contentType}: ${text.slice(0, 100)}...`);
-          throw new Error("Server returned non-JSON response");
+          return [];
         }
         return res.json();
       };
 
-      setTickets(await checkRes(tRes));
-      setUsers(await checkRes(uRes));
-      setSettings(await checkRes(sRes));
+      const data = await Promise.all(responses.map(res => checkRes(res)));
+
+      setTickets(data[0]);
+      setUsers(data[1]);
+      if (activeUser?.role === 'superuser') {
+        setSettings(data[2]);
+      } else {
+        setSettings(null);
+      }
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {
@@ -166,6 +200,7 @@ export default function App() {
         const userData = await res.json();
         setUser(userData);
         localStorage.setItem('wifi_user', JSON.stringify(userData));
+        fetchData(userData);
       } else {
         const errorData = await res.json();
         setLoginError(errorData.message || 'Username atau password salah');
@@ -178,6 +213,9 @@ export default function App() {
 
   const handleLogout = () => {
     setUser(null);
+    setTickets([]);
+    setUsers([]);
+    setSettings(null);
     localStorage.removeItem('wifi_user');
   };
 
@@ -238,7 +276,7 @@ export default function App() {
 
             <div className="mt-6 pt-6 border-t border-gray-100">
               <p className="text-xs text-center text-gray-400">
-                &copy;2026 GEKANET dev by <a href="https://wa.me/6281227647500" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">azis</a> | <a href="https://wa.me/6285156174374" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">sidiq</a>
+                &copy; GEKANET 2026 dev by <a href="https://wa.me/6281227647500" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">azis</a> | <a href="https://wa.me/6285156174374" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors">sidiq</a>
               </p>
             </div>
           </Card>
@@ -249,10 +287,12 @@ export default function App() {
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'technician', 'supervisor', 'superuser'] },
-    { id: 'tickets', label: 'Tiket', icon: TicketIcon, roles: ['admin', 'technician', 'supervisor', 'superuser'] },
+    { id: 'tickets', label: 'Tiket Open', icon: TicketIcon, roles: ['admin', 'technician', 'supervisor', 'superuser'] },
+    { id: 'tickets_closed', label: 'Tiket Closed', icon: CheckCircle2, roles: ['admin', 'supervisor', 'superuser'] },
     { id: 'export', label: 'Export', icon: Download, roles: ['admin', 'supervisor', 'superuser'] },
     { id: 'reports', label: 'Laporan', icon: CheckCircle2, roles: ['admin', 'supervisor', 'superuser'] },
     { id: 'users', label: 'User', icon: Users, roles: ['superuser'] },
+    { id: 'logs', label: 'Log Aktivitas', icon: RefreshCw, roles: ['superuser'] },
     { id: 'settings', label: 'Pengaturan', icon: Settings, roles: ['superuser'] },
   ];
 
@@ -280,7 +320,7 @@ export default function App() {
       )}>
         <div className="h-full flex flex-col">
           <div className="p-6 flex items-center gap-3 border-bottom border-gray-100">
-            <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mb-4 s  overflow-hidden">
+            <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mb-4 overflow-hidden">
               <img
                 src="https://geka.net.id/img/logo.png"
                 alt="GekaNet Logo"
@@ -349,8 +389,9 @@ export default function App() {
               <span className="text-sm font-medium text-gray-900">{format(currentTime, 'EEEE, d MMMM yyyy')}</span>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-gray-500 tabular-nums">
-                  {format(currentTime, 'HH:mm:ss')} WIB
+                  {format(currentTime, 'HH:mm:ss')}
                 </span>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">WIB</span>
               </div>
             </div>
           </div>
@@ -365,7 +406,12 @@ export default function App() {
             )}
             {activeTab === 'tickets' && (
               <motion.div key="tickets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <TicketsView tickets={tickets} user={user} users={users} onRefresh={fetchData} />
+                <TicketsView tickets={tickets} user={user} users={users} onRefresh={fetchData} showClosed={false} />
+              </motion.div>
+            )}
+            {activeTab === 'tickets_closed' && (
+              <motion.div key="tickets_closed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <TicketsView tickets={tickets} user={user} users={users} onRefresh={fetchData} showClosed={true} />
               </motion.div>
             )}
             {activeTab === 'export' && (
@@ -383,9 +429,14 @@ export default function App() {
                 <UsersView users={users} onRefresh={fetchData} />
               </motion.div>
             )}
+            {activeTab === 'logs' && (
+              <motion.div key="logs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <LogsView />
+              </motion.div>
+            )}
             {activeTab === 'settings' && (
               <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <SettingsView settings={settings} onRefresh={fetchData} />
+                <SettingsView settings={settings} onRefresh={fetchData} user={user} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -400,6 +451,54 @@ export default function App() {
     </div>
   );
 }
+
+// --- Helpers ---
+
+const extractCoordinates = (url?: string): [number, number] | null => {
+  if (!url) return null;
+
+  // Try to match lat,lng in various Google Maps URL formats
+  // Prioritize more specific location markers over map center (@)
+
+  // 1. !3d and !4d (common in place URLs, very specific)
+  const d3Match = url.match(/!3d([-+]?\d+\.\d+)/);
+  const d4Match = url.match(/!4d([-+]?\d+\.\d+)/);
+  if (d3Match && d4Match) return [parseFloat(d3Match[1]), parseFloat(d4Match[1])];
+
+  // 2. query=lat,lng
+  const queryMatch = url.match(/query=([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (queryMatch) return [parseFloat(queryMatch[1]), parseFloat(queryMatch[2])];
+
+  // 3. ll=lat,lng
+  const llMatch = url.match(/ll=([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (llMatch) return [parseFloat(llMatch[1]), parseFloat(llMatch[2])];
+
+  // 4. q=lat,lng
+  const qMatch = url.match(/q=([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (qMatch) return [parseFloat(qMatch[1]), parseFloat(qMatch[2])];
+
+  // 5. /maps/place/lat,lng
+  const placeMatch = url.match(/\/maps\/place\/([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (placeMatch) return [parseFloat(placeMatch[1]), parseFloat(placeMatch[2])];
+
+  // 6. /maps/search/lat,lng
+  const searchMatch = url.match(/\/maps\/search\/([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (searchMatch) return [parseFloat(searchMatch[1]), parseFloat(searchMatch[2])];
+
+  // 7. /maps/dir/lat,lng
+  const dirMatch = url.match(/\/maps\/dir\/([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (dirMatch) return [parseFloat(dirMatch[1]), parseFloat(dirMatch[2])];
+
+  // 8. @lat,lng (often just the map center, use as fallback)
+  const atMatch = url.match(/@([-+]?\d+\.\d+),([-+]?\d+\.\d+)/);
+  if (atMatch) return [parseFloat(atMatch[1]), parseFloat(atMatch[2])];
+
+  // 9. Just lat,lng in the string (e.g. "-7.123, 110.123")
+  const rawMatch = url.match(/([-+]?\d+\.\d+)\s*,\s*([-+]?\d+\.\d+)/);
+  if (rawMatch) return [parseFloat(rawMatch[1]), parseFloat(rawMatch[2])];
+
+  return null;
+};
 
 // --- Sub-Views ---
 
@@ -527,13 +626,17 @@ function ProgressItem({ label, value, total, color }: { label: string; value: nu
   );
 }
 
-function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; user: User; users: User[]; onRefresh: () => void }) {
+function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { tickets: Ticket[]; user: User; users: User[]; onRefresh: () => void; showClosed?: boolean }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isTechPickerOpen, setIsTechPickerOpen] = useState(false);
   const [filterType, setFilterType] = useState<'all' | TicketType>('maintenance');
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [mapMode, setMapMode] = useState<'street' | 'satellite' | 'hybrid'>('hybrid');
+  const [isMapModeDropdownOpen, setIsMapModeDropdownOpen] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
 
   const [newTicket, setNewTicket] = useState({
     type: 'installation' as TicketType,
@@ -552,9 +655,6 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
     status: 'completed' as TicketStatus,
     report: '',
     technicianNotes: '',
-    macAddress: '',
-    serialNumber: '',
-    tanggalAktivasi: '',
     assignedTechnicianIds: [] as string[],
     reportAttachmentUrl: '',
     reportAttachmentName: '',
@@ -574,7 +674,7 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
   }, [tickets]);
 
   const filteredTickets = tickets
-    .filter(t => t.status !== 'completed')
+    .filter(t => showClosed ? t.status === 'completed' : t.status !== 'completed')
     .filter(t => {
       if (user.role === 'technician') {
         return t.status === 'open';
@@ -582,7 +682,11 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
       return true;
     })
     .filter(t => filterType === 'all' ? true : t.type === filterType)
-    .filter(t => t.customerName.toLowerCase().includes(searchQuery.toLowerCase()) || t.id.includes(searchQuery));
+    .filter(t =>
+      t.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.address.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.issue && t.issue.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -645,9 +749,6 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
           status: 'completed',
           report: '',
           technicianNotes: '',
-          macAddress: '',
-          serialNumber: '',
-          tanggalAktivasi: '',
           assignedTechnicianIds: [],
           reportAttachmentUrl: '',
           reportAttachmentName: '',
@@ -682,7 +783,7 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <Input
               className="pl-10"
-              placeholder="Cari pelanggan atau ID..."
+              placeholder="Cari pelanggan, alamat, atau kendala..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
             />
@@ -696,8 +797,31 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
             <option value="installation">Pemasangan</option>
             <option value="maintenance">Maintenance</option>
           </Select>
+
+          <div className="flex items-center bg-white rounded-lg border border-gray-300 p-1">
+            <button
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "p-1.5 rounded-md transition-all",
+                viewMode === 'list' ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600"
+              )}
+              title="List View"
+            >
+              <List className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('map')}
+              className={cn(
+                "p-1.5 rounded-md transition-all",
+                viewMode === 'map' ? "bg-blue-50 text-blue-600" : "text-gray-400 hover:text-gray-600"
+              )}
+              title="Map View"
+            >
+              <MapIcon className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-        {(user.role === 'admin' || user.role === 'superuser') && (
+        {(user.role === 'admin' || user.role === 'superuser') && !showClosed && (
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
             Buat Tiket Baru
@@ -705,80 +829,220 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filteredTickets.map(ticket => (
-          <div key={ticket.id}>
-            <Card className="hover:border-blue-300 transition-all cursor-pointer group" onClick={() => setSelectedTicket(ticket)}>
-              {user.role === 'technician' ? (
-                <div className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
-                      <UserIcon className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">{ticket.customerName}</h4>
-                      <p className="text-xs text-gray-500 flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {ticket.address}
-                      </p>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-all group-hover:translate-x-1" />
-                </div>
-              ) : (
-                <div className="p-5 space-y-4">
-                  <div className="flex justify-between items-start">
-                    <Badge variant={ticket.type === 'installation' ? 'info' : 'warning'}>
-                      {ticket.type === 'installation' ? 'Pemasangan' : 'Maintenance'}
-                    </Badge>
-                    <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'}>
-                      {ticket.status}
-                    </Badge>
-                  </div>
-
-                  <div>
-                    <h4 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">{ticket.customerName}</h4>
-                    <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {format(parseISO(ticket.createdAt), 'd MMM yyyy, HH:mm')}
-                    </p>
-                  </div>
-
-                  <div className="space-y-2 text-sm text-gray-600">
-                    <div className="flex items-start gap-2">
-                      <MapPin className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
-                      <span className="line-clamp-1">{ticket.address}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <UserIcon className="w-4 h-4 text-gray-400 shrink-0" />
-                      <span>{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-50 flex justify-between items-center">
+      {viewMode === 'list' ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filteredTickets.map(ticket => (
+            <div key={ticket.id}>
+              <Card className="hover:border-blue-300 transition-all cursor-pointer group" onClick={() => setSelectedTicket(ticket)}>
+                {user.role === 'technician' ? (
+                  <div className="p-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span className="text-xs font-mono text-gray-400">#{ticket.id.slice(-6)}</span>
-                      <button
-                        onClick={(e) => handleDeleteTicket(e, ticket.id)}
-                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                        title="Hapus Tiket"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+                        <UserIcon className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm text-gray-900 group-hover:text-blue-600 transition-colors leading-tight">{ticket.customerName}</h4>
+                        <p className="text-[10px] text-gray-500 flex items-center gap-1 mt-0.5">
+                          <MapPin className="w-2.5 h-2.5" />
+                          {ticket.address}
+                        </p>
+                        <p className="text-[10px] font-medium text-blue-600 mt-0.5 line-clamp-1">
+                          {ticket.type === 'installation' ? `Paket: ${ticket.package}` : `Kendala: ${ticket.issue}`}
+                        </p>
+                      </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-all group-hover:translate-x-1" />
                   </div>
-                </div>
-              )}
-            </Card>
+                ) : (
+                  <div className="p-4 space-y-3">
+                    <div className="flex justify-between items-start">
+                      <Badge variant={ticket.type === 'installation' ? 'info' : 'warning'} className="text-[10px] px-1.5 py-0">
+                        {ticket.type === 'installation' ? 'Pemasangan' : 'Maintenance'}
+                      </Badge>
+                      <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'} className="text-[10px] px-1.5 py-0">
+                        {ticket.status}
+                      </Badge>
+                    </div>
+
+                    <div>
+                      <h4 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors leading-tight">{ticket.customerName}</h4>
+                      <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {format(parseISO(ticket.createdAt), 'd MMM yyyy, HH:mm')}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5 text-xs text-gray-600">
+                      <div className="flex items-start gap-2">
+                        <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                        <span className="line-clamp-1">{ticket.address}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <UserIcon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                        <span className="truncate">{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-gray-50 flex justify-between items-center">
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-mono text-gray-400">#{ticket.id.slice(-6)}</span>
+                        {!showClosed && (
+                          <button
+                            onClick={(e) => handleDeleteTicket(e, ticket.id)}
+                            className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-all opacity-0 group-hover:opacity-100"
+                            title="Hapus Tiket"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-all group-hover:translate-x-1" />
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </div>
+          ))}
+          {filteredTickets.length === 0 && (
+            <div className="col-span-full py-12 text-center text-gray-500">
+              {showClosed ? 'Tidak ada tiket yang sudah selesai' : 'Tidak ada tiket yang ditemukan'}
+            </div>
+          )}
+        </div>
+      ) : (
+        <Card className="h-[600px] relative z-0 overflow-hidden">
+          <div className="absolute top-4 right-4 z-[1000]">
+            <div className="relative">
+              <button
+                onClick={() => setIsMapModeDropdownOpen(!isMapModeDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-2 bg-white/80 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg hover:bg-white transition-all text-sm font-medium text-gray-700"
+              >
+                <Layers className="w-4 h-4 text-blue-600" />
+                <span className="capitalize">{mapMode}</span>
+              </button>
+
+              <AnimatePresence>
+                {isMapModeDropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 mt-2 w-32 bg-white rounded-lg shadow-xl border border-gray-100 p-1 overflow-hidden"
+                  >
+                    {(['street', 'satellite', 'hybrid'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => {
+                          setMapMode(mode);
+                          setIsMapModeDropdownOpen(false);
+                        }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 text-xs font-medium rounded-md transition-all capitalize",
+                          mapMode === mode
+                            ? "bg-blue-50 text-blue-600"
+                            : "text-gray-600 hover:bg-gray-50"
+                        )}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
-        ))}
-        {filteredTickets.length === 0 && (
-          <div className="col-span-full py-12 text-center text-gray-500">
-            Tidak ada tiket yang ditemukan
-          </div>
-        )}
-      </div>
+          <MapContainer
+            center={[-7.5, 110.5]}
+            zoom={8}
+            style={{ height: '100%', width: '100%' }}
+          >
+            {mapMode === 'street' ? (
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+            ) : mapMode === 'satellite' ? (
+              <TileLayer
+                attribution='&copy; <a href="https://www.esri.com/">Esri</a>, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+              />
+            ) : (
+              <>
+                <TileLayer
+                  attribution='&copy; <a href="https://www.esri.com/">Esri</a>, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                />
+                <TileLayer
+                  attribution='&copy; <a href="https://www.esri.com/">Esri</a>, HERE, Garmin, FAO, NOAA, USGS, EPA, NPS'
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+                />
+              </>
+            )}
+            {filteredTickets.map(ticket => {
+              const coords = extractCoordinates(ticket.locationUrl);
+              if (!coords) return null;
+
+              return (
+                <Marker
+                  key={ticket.id}
+                  position={coords}
+                  icon={L.icon({
+                    iconUrl: ticket.status === 'completed'
+                      ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png'
+                      : ticket.type === 'installation'
+                        ? 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png'
+                        : 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41]
+                  })}
+                >
+                  <Popup>
+                    <div className="p-1 min-w-[200px]">
+                      <div className="flex justify-between items-start mb-2">
+                        <Badge variant={ticket.type === 'installation' ? 'info' : 'warning'}>
+                          {ticket.type === 'installation' ? 'Pemasangan' : 'Maintenance'}
+                        </Badge>
+                        <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'}>
+                          {ticket.status}
+                        </Badge>
+                      </div>
+                      <h4 className="font-bold text-gray-900 mb-1">{ticket.customerName}</h4>
+                      <p className="text-xs text-gray-500 mb-2 flex items-center gap-1">
+                        <MapPin className="w-3 h-3" />
+                        {ticket.address}
+                      </p>
+                      <div className="space-y-1 text-xs text-gray-600 mb-3">
+                        <div className="flex items-center gap-2">
+                          <UserIcon className="w-3 h-3 text-gray-400" />
+                          <span>{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-3 h-3 text-gray-400" />
+                          <span className="font-medium text-blue-600">{ticket.type === 'installation' ? ticket.package : ticket.issue}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-3 h-3 text-gray-400" />
+                          <span>{format(parseISO(ticket.createdAt), 'd MMM yyyy')}</span>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        className="w-full py-1 text-xs"
+                        onClick={() => setSelectedTicket(ticket)}
+                      >
+                        Lihat Detail
+                      </Button>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+          </MapContainer>
+        </Card>
+      )}
 
       {/* Detail Modal */}
       <AnimatePresence>
@@ -826,15 +1090,62 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-blue-600 uppercase font-bold mb-0.5">Lokasi</p>
-                        <a
-                          href={selectedTicket.locationUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-blue-700 hover:underline break-all flex items-center gap-1"
-                        >
-                          Lihat Lokasi di Peta
-                          <ChevronRight className="w-3 h-3" />
-                        </a>
+                        <div className="flex flex-col gap-1">
+                          <a
+                            href={selectedTicket.locationUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-blue-700 hover:underline break-all flex items-center gap-1"
+                          >
+                            Lihat Lokasi di Peta
+                            <ChevronRight className="w-3 h-3" />
+                          </a>
+                          {!extractCoordinates(selectedTicket.locationUrl) && (
+                            <div className="mt-2 p-3 bg-amber-50 rounded-xl border border-amber-100">
+                              <div className="flex items-center gap-2 text-amber-700 mb-2">
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                <p className="text-[10px] font-bold uppercase tracking-wider">Koordinat Tidak Terdeteksi</p>
+                              </div>
+                              <p className="text-[10px] text-amber-600 mb-3 leading-relaxed">
+                                Link ini mungkin link pendek (goo.gl) atau format tidak standar. Gunakan tool di bawah untuk menerjemahkannya.
+                              </p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="w-full h-8 text-[10px] font-bold bg-white border-amber-200 text-amber-700 hover:bg-amber-100 hover:border-amber-300 transition-all"
+                                disabled={isResolving}
+                                onClick={async (e) => {
+                                  e.preventDefault();
+                                  setIsResolving(true);
+                                  try {
+                                    const res = await fetch(`/api/tickets/${selectedTicket.id}/resolve-location`, {
+                                      method: 'POST'
+                                    });
+                                    if (res.ok) {
+                                      const updatedTicket = await res.json();
+                                      setSelectedTicket(updatedTicket);
+                                      onRefresh();
+                                    } else {
+                                      alert('Gagal memperbarui link lokasi');
+                                    }
+                                  } catch (err) {
+                                    console.error(err);
+                                  } finally {
+                                    setIsResolving(false);
+                                  }
+                                }}
+                              >
+                                {isResolving ? (
+                                  <Loader2 className="w-3 h-3 animate-spin mr-2" />
+                                ) : (
+                                  <RefreshCw className="w-3 h-3 mr-2" />
+                                )}
+                                Terjemahkan Link (Resolve)
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -889,15 +1200,7 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
                   )}
 
                   {selectedTicket.type === 'installation' ? (
-                    <>
-                      <DetailItem icon={Plus} label="Paket" value={selectedTicket.package || '-'} />
-                      {selectedTicket.macAddress && (
-                        <DetailItem icon={Router} label="MAC Address" value={selectedTicket.macAddress} />
-                      )}
-                      {selectedTicket.serialNumber && (
-                        <DetailItem icon={Hash} label="Serial Number (SN)" value={selectedTicket.serialNumber} />
-                      )}
-                    </>
+                    <DetailItem icon={Plus} label="Paket" value={selectedTicket.package || '-'} />
                   ) : (
                     <DetailItem icon={AlertCircle} label="Kendala" value={selectedTicket.issue || '-'} />
                   )}
@@ -930,24 +1233,25 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
                 </div>
               </div>
               <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex gap-3">
-                {(user.role === 'technician' || user.role === 'admin' || user.role === 'superuser') && selectedTicket.status !== 'completed' && (
-                  <Button className="flex-1" onClick={() => {
-                    setReport({
-                      status: 'completed',
-                      report: '',
-                      technicianNotes: '',
-                      macAddress: selectedTicket.type === 'installation' ? (selectedTicket.macAddress || '') : '',
-                      serialNumber: selectedTicket.type === 'installation' ? (selectedTicket.serialNumber || '') : '',
-                      assignedTechnicianIds: user.role === 'technician' ? [user.id] : [],
-                      reportAttachmentUrl: '',
-                      reportAttachmentName: '',
-                    });
-                    setIsReportModalOpen(true);
-                  }}>
-                    <Settings className="w-4 h-4" />
-                    Aksi
-                  </Button>
-                )}
+                {(
+                  ((user.role === 'technician' || user.role === 'admin' || user.role === 'superuser') && selectedTicket.status !== 'completed') ||
+                  (user.role === 'superuser' && selectedTicket.status === 'completed')
+                ) && (
+                    <Button className="flex-1" onClick={() => {
+                      setReport({
+                        status: selectedTicket.status === 'open' ? 'completed' : selectedTicket.status,
+                        report: selectedTicket.report || '',
+                        technicianNotes: selectedTicket.technicianNotes || '',
+                        assignedTechnicianIds: selectedTicket.assignedTechnicianIds || (user.role === 'technician' ? [user.id] : []),
+                        reportAttachmentUrl: selectedTicket.reportAttachmentUrl || '',
+                        reportAttachmentName: selectedTicket.reportAttachmentName || '',
+                      });
+                      setIsReportModalOpen(true);
+                    }}>
+                      <Settings className="w-4 h-4" />
+                      {selectedTicket.status === 'completed' ? 'Edit Laporan' : 'Aksi'}
+                    </Button>
+                  )}
                 {user.role !== 'technician' && selectedTicket.status === 'open' && (
                   <Button
                     className="flex-1 bg-green-600 hover:bg-green-700"
@@ -1029,12 +1333,78 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Lokasi (Link Shareloc)</label>
-                    <Input
-                      value={newTicket.locationUrl}
-                      onChange={e => setNewTicket({ ...newTicket, locationUrl: e.target.value })}
-                      placeholder="Tempelkan link shareloc di sini"
-                    />
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center justify-between">
+                      Lokasi (Link Google Maps / Shareloc)
+                      {newTicket.locationUrl && extractCoordinates(newTicket.locationUrl) && (
+                        <span className="text-[10px] text-green-600 font-bold flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" />
+                          Ready
+                        </span>
+                      )}
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Input
+                          className="pr-10"
+                          value={newTicket.locationUrl}
+                          onChange={e => setNewTicket({ ...newTicket, locationUrl: e.target.value })}
+                          placeholder="Tempelkan link Google Maps di sini"
+                        />
+                        {newTicket.locationUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setNewTicket({ ...newTicket, locationUrl: '' })}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="shrink-0 h-10 px-3"
+                        disabled={!newTicket.locationUrl || isResolving}
+                        onClick={async () => {
+                          if (!newTicket.locationUrl) return;
+                          setIsResolving(true);
+                          try {
+                            const res = await fetch(`/api/resolve-url?url=${encodeURIComponent(newTicket.locationUrl)}`);
+                            if (res.ok) {
+                              const data = await res.json();
+                              setNewTicket({ ...newTicket, locationUrl: data.url });
+                            }
+                          } catch (err) {
+                            console.error(err);
+                          } finally {
+                            setIsResolving(false);
+                          }
+                        }}
+                      >
+                        {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                      </Button>
+                    </div>
+
+                    {newTicket.locationUrl && (
+                      <div className="mt-2 space-y-2">
+                        {extractCoordinates(newTicket.locationUrl) ? (
+                          <div className="p-2 bg-blue-50 rounded-lg border border-blue-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-3 h-3 text-blue-600" />
+                              <span className="text-[10px] font-mono text-blue-700">
+                                {extractCoordinates(newTicket.locationUrl)?.join(', ')}
+                              </span>
+                            </div>
+                            <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">OK</span>
+                          </div>
+                        ) : (
+                          <div className="p-2 bg-amber-50 rounded-lg border border-amber-100 flex items-center gap-2 text-amber-700">
+                            <AlertCircle className="w-3 h-3" />
+                            <span className="text-[10px] italic">Link tidak mengandung koordinat. Coba klik tombol "Check" di atas.</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {newTicket.type === 'installation' ? (
                     <div>
@@ -1159,36 +1529,6 @@ function TicketsView({ tickets, user, users, onRefresh }: { tickets: Ticket[]; u
                     <label className="block text-sm font-medium text-gray-700 mb-1">Catatan Tambahan</label>
                     <Input value={report.technicianNotes} onChange={e => setReport({ ...report, technicianNotes: e.target.value })} />
                   </div>
-
-                  {selectedTicket?.type === 'installation' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">MAC Address</label>
-                        <Input
-                          placeholder="Contoh: 00:11:22:33:44:55"
-                          value={report.macAddress}
-                          onChange={e => setReport({ ...report, macAddress: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Serial Number (SN)</label>
-                        <Input
-                          placeholder="Masukkan serial number"
-                          value={report.serialNumber}
-                          onChange={e => setReport({ ...report, serialNumber: e.target.value })}
-                        />
-                      </div>
-                      <div class="form-group">
-                        <label>Tanggal Aktivasi</label>
-                        <input
-                          type="date"
-                          class="form-control"
-                          v-model="form.tanggalAktivasi"
-                          required
-                        />
-                      </div>
-                    </div>
-                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Teknisi yang Mengerjakan</label>
@@ -1475,8 +1815,6 @@ function ExportView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
         'NamaTeknisi': techNames,
         'WaktuTangani': t.completedAt ? format(parseISO(t.completedAt), 'yyyy-MM-dd HH:mm:ss') : '-',
         'Solusi/Tindakan': t.report || '-',
-        'MAC Address': t.type === 'installation' ? (t.macAddress || '-') : '-',
-        'Serial Number': t.type === 'installation' ? (t.serialNumber || '-') : '-',
         'CatatanTeknisi': t.technicianNotes || '-',
         'LampiranTeknisi': t.reportAttachmentUrl || '-',
         'Durasi': duration
@@ -1564,8 +1902,6 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
         'Tim Teknisi': assignedTechs || '-',
         'Waktu Tangani': t.completedAt ? format(completedAt, 'yyyy-MM-dd HH:mm:ss') : '-',
         'Solusi/Tindakan': t.report || '-',
-        'MAC Address': t.type === 'installation' ? (t.macAddress || '-') : '-',
-        'Serial Number': t.type === 'installation' ? (t.serialNumber || '-') : '-',
         'Catatan Teknisi': t.technicianNotes || '-',
         'Lampiran Teknisi': t.reportAttachmentUrl ? `${window.location.origin}${t.reportAttachmentUrl}` : '-',
         'Durasi (Menit)': duration
@@ -1748,13 +2084,6 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
                   <DetailItem icon={UserIcon} label="Pelanggan" value={selectedTicket.customerName} />
                   <DetailItem icon={Phone} label="Telepon" value={selectedTicket.phone} />
                   <DetailItem icon={MapPin} label="Alamat" value={selectedTicket.address} />
-
-                  {selectedTicket.type === 'installation' && selectedTicket.macAddress && (
-                    <DetailItem icon={Router} label="MAC Address" value={selectedTicket.macAddress} />
-                  )}
-                  {selectedTicket.type === 'installation' && selectedTicket.serialNumber && (
-                    <DetailItem icon={Hash} label="Serial Number (SN)" value={selectedTicket.serialNumber} />
-                  )}
 
                   <div className="space-y-1">
                     <p className="text-xs text-gray-500 uppercase font-bold flex items-center gap-2">
@@ -2039,7 +2368,7 @@ function UsersView({ users, onRefresh }: { users: User[]; onRefresh: () => void 
   );
 }
 
-function SettingsView({ settings, onRefresh }: { settings: AppSettings | null; onRefresh: () => void }) {
+function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | null; onRefresh: () => void; user: User }) {
   const [token, setToken] = useState(settings?.fonnteToken || '');
   const [group, setGroup] = useState(settings?.whatsappGroup || '');
   const [templateInstallation, setTemplateInstallation] = useState(settings?.templateInstallation || '');
@@ -2284,6 +2613,109 @@ function SettingsView({ settings, onRefresh }: { settings: AppSettings | null; o
           Pastikan nomor pengirim sudah aktif di dashboard Fonnte agar notifikasi dapat terkirim dengan lancar.
           Gunakan variabel yang tersedia untuk mempersonalisasi pesan Anda.
         </p>
+      </Card>
+    </motion.div>
+  );
+}
+
+function LogsView() {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/logs');
+      if (res.ok) {
+        setLogs(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="max-w-6xl mx-auto"
+    >
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+              <RefreshCw className={cn("w-5 h-5 text-blue-600", loading && "animate-spin")} />
+              Log Aktivitas Sistem
+            </h3>
+            <p className="text-sm text-gray-500 mt-1">Memantau seluruh aktivitas perubahan data dan akses sistem</p>
+          </div>
+          <Button variant="outline" onClick={fetchLogs} disabled={loading}>
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        <div className="border border-gray-100 rounded-xl overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="px-6 py-4 font-bold text-gray-600 uppercase tracking-wider text-[10px]">Waktu</th>
+                  <th className="px-6 py-4 font-bold text-gray-600 uppercase tracking-wider text-[10px]">User</th>
+                  <th className="px-6 py-4 font-bold text-gray-600 uppercase tracking-wider text-[10px]">Aksi</th>
+                  <th className="px-6 py-4 font-bold text-gray-600 uppercase tracking-wider text-[10px]">Detail Aktivitas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {logs.map(log => (
+                  <tr key={log.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 text-gray-400 whitespace-nowrap font-mono text-xs">
+                      {format(parseISO(log.timestamp), 'dd MMM yyyy, HH:mm:ss')}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 text-[10px] font-bold">
+                          {log.user.charAt(0)}
+                        </div>
+                        <span className="font-semibold text-gray-900">{log.user}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-tight",
+                        log.action === 'LOGIN' ? "bg-green-100 text-green-700" :
+                          log.action === 'TICKET_CREATE' ? "bg-blue-100 text-blue-700" :
+                            log.action === 'TICKET_UPDATE' ? "bg-orange-100 text-orange-700" :
+                              "bg-gray-100 text-gray-700"
+                      )}>
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-gray-600 leading-relaxed">
+                      {log.details}
+                    </td>
+                  </tr>
+                ))}
+                {logs.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center text-gray-400 italic">
+                      <div className="flex flex-col items-center gap-2">
+                        <RefreshCw className="w-8 h-8 text-gray-200" />
+                        <span>Belum ada log aktivitas yang tercatat</span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </Card>
     </motion.div>
   );

@@ -32,8 +32,6 @@ export interface Ticket {
   reportAttachmentName?: string;
   notes?: string;
   technicianNotes?: string;
-  macAddress?: string;
-  serialNumber?: string;
 }
 
 export interface AppSettings {

@@ -37,7 +37,8 @@ const initialData = {
     templateMaintenance: "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}{link}",
     templateClosed: "Tiket {id} Selesai!\nPelanggan: {customerName}\nStatus: Selesai\nLaporan: {report}{link}",
     mediaRetentionDays: 60,
-  }
+  },
+  logs: []
 };
 
 if (!fs.existsSync(DB_FILE)) {
@@ -50,6 +51,21 @@ function getDB() {
 
 function saveDB(data: any) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+}
+
+function addLog(action: string, user: string, details: string) {
+  const db = getDB();
+  if (!db.logs) db.logs = [];
+  db.logs.unshift({
+    id: Date.now().toString(),
+    timestamp: new Date().toISOString(),
+    action,
+    user,
+    details
+  });
+  // Keep only last 500 logs
+  if (db.logs.length > 500) db.logs = db.logs.slice(0, 500);
+  saveDB(db);
 }
 
 // WhatsApp Helper
@@ -148,6 +164,45 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
 
 app.use("/uploads", express.static(UPLOADS_DIR));
 
+// URL Resolver Helper
+async function resolveUrl(url: string): Promise<string> {
+  if (!url) return url;
+  
+  // Broaden the check for shortened URLs
+  const isShortened = 
+    url.includes("goo.gl") || 
+    url.includes("maps.app.goo.gl") || 
+    url.includes("bit.ly") || 
+    url.includes("t.co") || 
+    url.includes("tinyurl.com");
+
+  if (!isShortened) return url;
+
+  try {
+    const response = await axios.get(url, {
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+    return response.request.res.responseUrl || url;
+  } catch (err) {
+    console.error("URL Resolve error:", err);
+    return url;
+  }
+}
+
+app.get("/api/resolve-url", async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== "string") {
+    return res.status(400).json({ message: "URL is required" });
+  }
+  try {
+    const resolvedUrl = await resolveUrl(url);
+    res.json({ url: resolvedUrl });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to resolve URL" });
+  }
+});
+
 // API Routes
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
@@ -155,10 +210,16 @@ app.post("/api/login", (req, res) => {
   const user = db.users.find((u: any) => u.username === username && u.password === password);
   if (user) {
     const { password, ...userWithoutPassword } = user;
+    addLog("LOGIN", user.name, `User ${user.username} logged in`);
     res.json(userWithoutPassword);
   } else {
     res.status(401).json({ message: "Invalid credentials" });
   }
+});
+
+app.get("/api/logs", (req, res) => {
+  const db = getDB();
+  res.json(db.logs || []);
 });
 
 app.get("/api/tickets", (req, res) => {
@@ -168,14 +229,22 @@ app.get("/api/tickets", (req, res) => {
 
 app.post("/api/tickets", async (req, res) => {
   const db = getDB();
+  
+  let locationUrl = req.body.locationUrl;
+  if (locationUrl) {
+    locationUrl = await resolveUrl(locationUrl);
+  }
+
   const newTicket = {
     id: Date.now().toString(),
     createdAt: new Date().toISOString(),
     status: "open",
-    ...req.body
+    ...req.body,
+    locationUrl
   };
   db.tickets.push(newTicket);
   saveDB(db);
+  addLog("TICKET_CREATE", req.body.createdBy || "System", `Created ticket for ${newTicket.customerName}`);
 
   // Notify via WhatsApp if it's maintenance or if group is configured
   const template = newTicket.type === "maintenance" 
@@ -228,8 +297,13 @@ app.patch("/api/tickets/:id", async (req, res) => {
   const db = getDB();
   const index = db.tickets.findIndex((t: any) => t.id === id);
   if (index !== -1) {
-    db.tickets[index] = { ...db.tickets[index], ...req.body };
+    let updateData = { ...req.body };
+    if (updateData.locationUrl) {
+      updateData.locationUrl = await resolveUrl(updateData.locationUrl);
+    }
+    db.tickets[index] = { ...db.tickets[index], ...updateData };
     saveDB(db);
+    addLog("TICKET_UPDATE", req.body.updatedBy || "System", `Updated ticket ${id} status to ${updateData.status || db.tickets[index].status}`);
 
     // Notify if handled
     if (req.body.status === "completed") {
@@ -250,6 +324,24 @@ app.patch("/api/tickets/:id", async (req, res) => {
   }
 });
 
+app.post("/api/tickets/:id/resolve-location", async (req, res) => {
+  const { id } = req.params;
+  const db = getDB();
+  const index = db.tickets.findIndex((t: any) => t.id === id);
+  if (index !== -1) {
+    const ticket = db.tickets[index];
+    if (ticket.locationUrl) {
+      ticket.locationUrl = await resolveUrl(ticket.locationUrl);
+      saveDB(db);
+      res.json(ticket);
+    } else {
+      res.status(400).json({ message: "No location URL to resolve" });
+    }
+  } else {
+    res.status(404).json({ message: "Ticket not found" });
+  }
+});
+
 app.delete("/api/tickets/:id", (req, res) => {
   const { id } = req.params;
   const db = getDB();
@@ -265,7 +357,17 @@ app.delete("/api/tickets/:id", (req, res) => {
 
 app.get("/api/users", (req, res) => {
   const db = getDB();
-  res.json(db.users);
+  // In a real app, we would check the session/token here
+  const usersWithoutPasswords = db.users.map(({ password, ...user }: any) => user);
+  res.json(usersWithoutPasswords);
+});
+
+app.get("/api/technicians", (req, res) => {
+  const db = getDB();
+  const technicians = db.users
+    .filter((u: any) => u.role === "technician")
+    .map(({ id, name }: any) => ({ id, name }));
+  res.json(technicians);
 });
 
 app.post("/api/users", (req, res) => {
@@ -273,7 +375,8 @@ app.post("/api/users", (req, res) => {
   const newUser = { id: Date.now().toString(), ...req.body };
   db.users.push(newUser);
   saveDB(db);
-  res.json(newUser);
+  const { password, ...userWithoutPassword } = newUser;
+  res.json(userWithoutPassword);
 });
 
 app.patch("/api/users/:id", (req, res) => {
@@ -281,9 +384,14 @@ app.patch("/api/users/:id", (req, res) => {
   const db = getDB();
   const index = db.users.findIndex((u: any) => u.id === id);
   if (index !== -1) {
-    db.users[index] = { ...db.users[index], ...req.body };
+    const updateData = { ...req.body };
+    if (!updateData.password) {
+      delete updateData.password;
+    }
+    db.users[index] = { ...db.users[index], ...updateData };
     saveDB(db);
-    res.json(db.users[index]);
+    const { password, ...userWithoutPassword } = db.users[index];
+    res.json(userWithoutPassword);
   } else {
     res.status(404).json({ message: "User not found" });
   }

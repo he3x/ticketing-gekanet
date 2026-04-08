@@ -2803,5 +2803,21 @@
     "templateMaintenance": "🚨{id}: {type}🚨\nNama: {customerName}\nKontak: {phone}\nAlamat: {address}{location}\n{detail}\n{notes}\n{link}",
     "templateClosed": "✅TICKET CLOSED{id}✅\n{customerName} {address}\nTeknisi: {technician}\nTindakan: {report}\n{notes}",
     "mediaRetentionDays": 60
-  }
+  },
+  "logs": [
+    {
+      "id": "1775613804364",
+      "timestamp": "2026-04-08T02:03:24.364Z",
+      "action": "LOGIN",
+      "user": "sidiq",
+      "details": "User he3x logged in"
+    },
+    {
+      "id": "1775612770639",
+      "timestamp": "2026-04-08T01:46:10.639Z",
+      "action": "LOGIN",
+      "user": "sidiq",
+      "details": "User he3x logged in"
+    }
+  ]
 }
