@@ -286,8 +286,8 @@ export default function App() {
   }
 
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'technician', 'supervisor', 'superuser'] },
-    { id: 'tickets', label: 'Tiket Open', icon: TicketIcon, roles: ['admin', 'technician', 'supervisor', 'superuser'] },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'technician', 'vendor', 'supervisor', 'superuser'] },
+    { id: 'tickets', label: 'Tiket Open', icon: TicketIcon, roles: ['admin', 'technician', 'vendor', 'supervisor', 'superuser'] },
     { id: 'tickets_closed', label: 'Tiket Closed', icon: CheckCircle2, roles: ['admin', 'supervisor', 'superuser'] },
     { id: 'export', label: 'Export', icon: Download, roles: ['admin', 'supervisor', 'superuser'] },
     { id: 'reports', label: 'Laporan', icon: CheckCircle2, roles: ['admin', 'supervisor', 'superuser'] },
@@ -503,7 +503,7 @@ const extractCoordinates = (url?: string): [number, number] | null => {
 // --- Sub-Views ---
 
 function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User; users: User[] }) {
-  const stats = user.role === 'technician'
+  const stats = (user.role === 'technician' || user.role === 'vendor')
     ? {
       total: tickets.filter(t => t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)).length,
       open: tickets.filter(t => t.status === 'open').length,
@@ -521,7 +521,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
       installation: tickets.filter(t => t.type === 'installation').length,
     };
 
-  const userTickets = user.role === 'technician'
+  const userTickets = (user.role === 'technician' || user.role === 'vendor')
     ? tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.status !== 'completed')
     : tickets.filter(t => t.status !== 'completed');
 
@@ -531,7 +531,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
       animate={{ opacity: 1, y: 0 }}
       className="space-y-6"
     >
-      {user.role === 'technician' && (
+      {(user.role === 'technician' || user.role === 'vendor') && (
         <div className="p-4 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-200">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center">
@@ -660,6 +660,33 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     reportAttachmentName: '',
   });
 
+  const isFieldWorker = user.role === 'technician' || user.role === 'vendor';
+  const isVendor = user.role === 'vendor';
+  const workerUsers = users.filter(u => u.role === 'technician' || u.role === 'vendor' || !u.role);
+  const technicians = workerUsers;
+
+  const getWorkerName = (id?: string) => {
+    if (!id) return 'Unknown';
+    return workerUsers.find(u => u.id === id)?.name || users.find(u => u.id === id)?.name || 'Unknown';
+  };
+
+  const getTicketWorkerLabel = (ticket: Ticket) => {
+    const assignedNames = ticket.assignedTechnicianIds
+      ?.map(id => getWorkerName(id))
+      .filter(name => name && name !== 'Unknown');
+
+    if (assignedNames && assignedNames.length > 0) {
+      return assignedNames.join(', ');
+    }
+
+    if (ticket.technicianId) {
+      const workerName = getWorkerName(ticket.technicianId);
+      return workerName !== 'Unknown' ? workerName : 'Unassigned';
+    }
+
+    return 'Unassigned';
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ticketId = params.get('ticketId');
@@ -676,7 +703,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const filteredTickets = tickets
     .filter(t => showClosed ? t.status === 'completed' : t.status !== 'completed')
     .filter(t => {
-      if (user.role === 'technician') {
+      if ((user.role === 'technician' || user.role === 'vendor')) {
         return t.status === 'open';
       }
       return true;
@@ -773,7 +800,6 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     }
   };
 
-  const technicians = users.filter(u => u.role === 'technician');
 
   return (
     <div className="space-y-6">
@@ -834,7 +860,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
           {filteredTickets.map(ticket => (
             <div key={ticket.id}>
               <Card className="hover:border-blue-300 transition-all cursor-pointer group" onClick={() => setSelectedTicket(ticket)}>
-                {user.role === 'technician' ? (
+                {(user.role === 'technician' || user.role === 'vendor') ? (
                   <div className="p-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
@@ -879,7 +905,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       </div>
                       <div className="flex items-center gap-2">
                         <UserIcon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                        <span className="truncate">{getTicketWorkerLabel(ticket)}</span>
                       </div>
                     </div>
 
@@ -1017,7 +1043,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <div className="space-y-1 text-xs text-gray-600 mb-3">
                         <div className="flex items-center gap-2">
                           <UserIcon className="w-3 h-3 text-gray-400" />
-                          <span>{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                          <span>{getTicketWorkerLabel(ticket)}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <AlertCircle className="w-3 h-3 text-gray-400" />
@@ -1158,7 +1184,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       {selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0 ? (
                         selectedTicket.assignedTechnicianIds.map(id => (
                           <span key={id} className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                            {technicians.find(t => t.id === id)?.name || 'Unknown'}
+                            {getWorkerName(id)}
                           </span>
                         ))
                       ) : (
@@ -1234,7 +1260,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
               </div>
               <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex gap-3">
                 {(
-                  ((user.role === 'technician' || user.role === 'admin' || user.role === 'superuser') && selectedTicket.status !== 'completed') ||
+                  ((isFieldWorker || user.role === 'admin' || user.role === 'superuser') && selectedTicket.status !== 'completed') ||
                   (user.role === 'superuser' && selectedTicket.status === 'completed')
                 ) && (
                     <Button className="flex-1" onClick={() => {
@@ -1242,7 +1268,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                         status: selectedTicket.status === 'open' ? 'completed' : selectedTicket.status,
                         report: selectedTicket.report || '',
                         technicianNotes: selectedTicket.technicianNotes || '',
-                        assignedTechnicianIds: selectedTicket.assignedTechnicianIds || (user.role === 'technician' ? [user.id] : []),
+                        assignedTechnicianIds: isVendor
+                          ? [user.id]
+                          : (selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0
+                              ? selectedTicket.assignedTechnicianIds
+                              : (user.role === 'technician' ? [user.id] : [])),
                         reportAttachmentUrl: selectedTicket.reportAttachmentUrl || '',
                         reportAttachmentName: selectedTicket.reportAttachmentName || '',
                       });
@@ -1252,7 +1282,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       {selectedTicket.status === 'completed' ? 'Edit Laporan' : 'Aksi'}
                     </Button>
                   )}
-                {user.role !== 'technician' && selectedTicket.status === 'open' && (
+                {user.role !== 'technician' && user.role !== 'vendor' && selectedTicket.status === 'open' && (
                   <Button
                     className="flex-1 bg-green-600 hover:bg-green-700"
                     onClick={async () => {
@@ -1531,25 +1561,36 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Teknisi yang Mengerjakan</label>
-                    <button
-                      type="button"
-                      onClick={() => setIsTechPickerOpen(true)}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="flex flex-wrap gap-1">
-                        {report.assignedTechnicianIds.length > 0 ? (
-                          report.assignedTechnicianIds.map(id => (
-                            <span key={id} className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
-                              {technicians.find(t => t.id === id)?.name}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-sm text-gray-400 italic">Pilih teknisi...</span>
-                        )}
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Pelaksana Pekerjaan</label>
+                    {isVendor ? (
+                      <div className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+                        <div className="flex flex-wrap gap-1">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                            {user.name}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-500">Role vendor otomatis tercatat atas nama vendor login dan tidak memilih teknisi.</p>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-gray-400" />
-                    </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsTechPickerOpen(true)}
+                        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="flex flex-wrap gap-1">
+                          {report.assignedTechnicianIds.length > 0 ? (
+                            report.assignedTechnicianIds.map(id => (
+                              <span key={id} className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
+                                {workerUsers.find(t => t.id === id)?.name}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-sm text-gray-400 italic">Pilih teknisi...</span>
+                          )}
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-gray-400" />
+                      </button>
+                    )}
                   </div>
 
                   <div>
@@ -1622,7 +1663,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
               className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden"
             >
               <div className="p-4 border-b border-gray-100 flex justify-between items-center">
-                <h4 className="font-bold text-gray-900">Pilih Teknisi</h4>
+                <h4 className="font-bold text-gray-900">Pilih Pelaksana</h4>
                 <button onClick={() => setIsTechPickerOpen(false)} className="p-1 hover:bg-gray-100 rounded-full">
                   <X className="w-4 h-4" />
                 </button>
@@ -1875,7 +1916,12 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), 'yyyy-MM'));
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
-  const technicians = users.filter(u => u.role === 'technician');
+  const technicians = users.filter(u => u.role === 'technician' || u.role === 'vendor' || !u.role);
+
+  const getWorkerName = (id?: string) => {
+    if (!id) return 'Unknown';
+    return technicians.find(u => u.id === id)?.name || users.find(u => u.id === id)?.name || 'Unknown';
+  };
 
   const handleExport = () => {
     const data = filteredTickets.map(t => {
@@ -2094,12 +2140,12 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
                       {selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0 ? (
                         selectedTicket.assignedTechnicianIds.map(id => (
                           <span key={id} className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                            {users.find(u => u.id === id)?.name || 'Unknown'}
+                            {getWorkerName(id)}
                           </span>
                         ))
                       ) : (
                         <span className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                          {users.find(u => u.id === selectedTicket.technicianId)?.name || 'Unassigned'}
+                          {selectedTicket.technicianId ? getWorkerName(selectedTicket.technicianId) : 'Unassigned'}
                         </span>
                       )}
                     </div>
@@ -2321,6 +2367,7 @@ function UsersView({ users, onRefresh }: { users: User[]; onRefresh: () => void 
                     <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                     <Select value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value as any })}>
                       <option value="technician">Teknisi</option>
+                      <option value="vendor">Vendor</option>
                       <option value="admin">Admin</option>
                       <option value="supervisor">Pengawas</option>
                       <option value="superuser">Super User</option>
@@ -2378,6 +2425,16 @@ function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | n
   const [activeTab, setActiveTab] = useState<'installation' | 'maintenance' | 'closed'>('installation');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!settings) return;
+    setToken(settings.fonnteToken || '');
+    setGroup(settings.whatsappGroup || '');
+    setTemplateInstallation(settings.templateInstallation || '');
+    setTemplateMaintenance(settings.templateMaintenance || '');
+    setTemplateClosed(settings.templateClosed || '');
+    setMediaRetentionDays(settings.mediaRetentionDays || 60);
+  }, [settings]);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -2415,7 +2472,7 @@ function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | n
     { key: '{report}', label: 'Laporan Penanganan' },
     { key: '{notes}', label: 'Catatan Teknisi' },
     { key: '{phone}', label: 'Telepon Pelanggan' },
-    { key: '{technician}', label: 'Nama Teknisi' },
+    { key: '{technician}', label: 'Nama Pelaksana' },
     { key: '{media}', label: 'Link Media/Drive' },
     { key: '{link}', label: 'Link Tiket' },
   ];
@@ -2441,7 +2498,7 @@ function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | n
       .replace(/{report}/g, 'Sudah dilakukan reset ONT')
       .replace(/{notes}/g, 'Kabel patchcord agak kendor')
       .replace(/{phone}/g, '628123456789')
-      .replace(/{technician}/g, 'Budi Technician')
+      .replace(/{technician}/g, 'Budi Technician / Vendor Lapangan')
       .replace(/{media}/g, 'https://drive.google.com/file/d/123456789/view')
       .replace(/{link}/g, '\nLink Tiket: https://app.url/?ticketId=TKT-12345');
   };

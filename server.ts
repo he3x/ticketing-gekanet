@@ -25,9 +25,10 @@ const initialData = {
     { id: "1", username: "admin", password: "password", role: "admin", name: "Admin User" },
     { id: "2", username: "tech1", password: "password", role: "technician", name: "Budi Technician" },
     { id: "3", username: "tech2", password: "password", role: "technician", name: "Andi Technician" },
-    { id: "4", username: "pengawas", password: "password", role: "supervisor", name: "Siti Pengawas" },
-    { id: "5", username: "superuser", password: "password", role: "superuser", name: "Super User" },
-    { id: "6", username: "superadmin", password: "password", role: "superuser", name: "Super Admin" },
+    { id: "4", username: "vendor1", password: "password", role: "vendor", name: "Vendor Lapangan" },
+    { id: "5", username: "pengawas", password: "password", role: "supervisor", name: "Siti Pengawas" },
+    { id: "6", username: "superuser", password: "password", role: "superuser", name: "Super User" },
+    { id: "7", username: "superadmin", password: "password", role: "superuser", name: "Super Admin" },
   ],
   tickets: [],
   settings: {
@@ -99,6 +100,11 @@ function formatMessage(template: string, ticket: any, db: any, origin?: string) 
     mediaLinks = ticket.attachments.map((a: any) => a.url).join("\n");
   } else if (ticket.mediaUrl) {
     mediaLinks = ticket.mediaUrl;
+  } else {
+    const singleLinks = [ticket.attachmentUrl, ticket.reportAttachmentUrl].filter(Boolean);
+    if (singleLinks.length > 0) {
+      mediaLinks = singleLinks.join("\n");
+    }
   }
 
   return template
@@ -365,8 +371,8 @@ app.get("/api/users", (req, res) => {
 app.get("/api/technicians", (req, res) => {
   const db = getDB();
   const technicians = db.users
-    .filter((u: any) => u.role === "technician")
-    .map(({ id, name }: any) => ({ id, name }));
+    .filter((u: any) => u.role === "technician" || u.role === "vendor")
+    .map(({ password, ...user }: any) => ({ ...user }));
   res.json(technicians);
 });
 
