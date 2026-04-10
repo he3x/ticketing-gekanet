@@ -152,7 +152,7 @@ export default function App() {
         endpoints.push('/api/technicians');
       }
 
-      const responses = await Promise.all(endpoints.map(url => fetch(url)));
+      const responses = await Promise.all(endpoints.map(url => fetch(url, { cache: 'no-store' })));
 
       const checkRes = async (res: Response) => {
         const contentType = res.headers.get("content-type");
@@ -436,7 +436,7 @@ export default function App() {
             )}
             {activeTab === 'settings' && (
               <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <SettingsView settings={settings} onRefresh={fetchData} user={user} />
+                <SettingsView settings={settings} onRefresh={fetchData} onSettingsSaved={setSettings} user={user} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -662,30 +662,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
 
   const isFieldWorker = user.role === 'technician' || user.role === 'vendor';
   const isVendor = user.role === 'vendor';
+  const technicians = users.filter(u => u.role === 'technician' || !u.role);
   const workerUsers = users.filter(u => u.role === 'technician' || u.role === 'vendor' || !u.role);
-  const technicians = workerUsers;
-
-  const getWorkerName = (id?: string) => {
-    if (!id) return 'Unknown';
-    return workerUsers.find(u => u.id === id)?.name || users.find(u => u.id === id)?.name || 'Unknown';
-  };
-
-  const getTicketWorkerLabel = (ticket: Ticket) => {
-    const assignedNames = ticket.assignedTechnicianIds
-      ?.map(id => getWorkerName(id))
-      .filter(name => name && name !== 'Unknown');
-
-    if (assignedNames && assignedNames.length > 0) {
-      return assignedNames.join(', ');
-    }
-
-    if (ticket.technicianId) {
-      const workerName = getWorkerName(ticket.technicianId);
-      return workerName !== 'Unknown' ? workerName : 'Unassigned';
-    }
-
-    return 'Unassigned';
-  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -905,7 +883,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       </div>
                       <div className="flex items-center gap-2">
                         <UserIcon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{getTicketWorkerLabel(ticket)}</span>
+                        <span className="truncate">{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
                       </div>
                     </div>
 
@@ -1043,7 +1021,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <div className="space-y-1 text-xs text-gray-600 mb-3">
                         <div className="flex items-center gap-2">
                           <UserIcon className="w-3 h-3 text-gray-400" />
-                          <span>{getTicketWorkerLabel(ticket)}</span>
+                          <span>{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <AlertCircle className="w-3 h-3 text-gray-400" />
@@ -1184,7 +1162,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       {selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0 ? (
                         selectedTicket.assignedTechnicianIds.map(id => (
                           <span key={id} className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                            {getWorkerName(id)}
+                            {technicians.find(t => t.id === id)?.name || 'Unknown'}
                           </span>
                         ))
                       ) : (
@@ -1663,7 +1641,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
               className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden"
             >
               <div className="p-4 border-b border-gray-100 flex justify-between items-center">
-                <h4 className="font-bold text-gray-900">Pilih Pelaksana</h4>
+                <h4 className="font-bold text-gray-900">Pilih Teknisi</h4>
                 <button onClick={() => setIsTechPickerOpen(false)} className="p-1 hover:bg-gray-100 rounded-full">
                   <X className="w-4 h-4" />
                 </button>
@@ -1918,11 +1896,6 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
 
   const technicians = users.filter(u => u.role === 'technician' || u.role === 'vendor' || !u.role);
 
-  const getWorkerName = (id?: string) => {
-    if (!id) return 'Unknown';
-    return technicians.find(u => u.id === id)?.name || users.find(u => u.id === id)?.name || 'Unknown';
-  };
-
   const handleExport = () => {
     const data = filteredTickets.map(t => {
       const tech = users.find(u => u.id === t.technicianId);
@@ -2140,12 +2113,12 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
                       {selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0 ? (
                         selectedTicket.assignedTechnicianIds.map(id => (
                           <span key={id} className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                            {getWorkerName(id)}
+                            {users.find(u => u.id === id)?.name || 'Unknown'}
                           </span>
                         ))
                       ) : (
                         <span className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-blue-100 text-blue-700">
-                          {selectedTicket.technicianId ? getWorkerName(selectedTicket.technicianId) : 'Unassigned'}
+                          {users.find(u => u.id === selectedTicket.technicianId)?.name || 'Unassigned'}
                         </span>
                       )}
                     </div>
@@ -2415,7 +2388,7 @@ function UsersView({ users, onRefresh }: { users: User[]; onRefresh: () => void 
   );
 }
 
-function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | null; onRefresh: () => void; user: User }) {
+function SettingsView({ settings, onRefresh, onSettingsSaved, user }: { settings: AppSettings | null; onRefresh: () => void; onSettingsSaved: (next: AppSettings | null) => void; user: User }) {
   const [token, setToken] = useState(settings?.fonnteToken || '');
   const [group, setGroup] = useState(settings?.whatsappGroup || '');
   const [templateInstallation, setTemplateInstallation] = useState(settings?.templateInstallation || '');
@@ -2435,28 +2408,47 @@ function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | n
     setMediaRetentionDays(settings.mediaRetentionDays || 60);
   }, [settings]);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async () => {
     setSaving(true);
     try {
+      const payload = {
+        fonnteToken: token.trim(),
+        whatsappGroup: group.trim(),
+        templateInstallation,
+        templateMaintenance,
+        templateClosed,
+        mediaRetentionDays
+      };
+
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fonnteToken: token,
-          whatsappGroup: group,
-          templateInstallation,
-          templateMaintenance,
-          templateClosed,
-          mediaRetentionDays
-        })
+        cache: 'no-store',
+        body: JSON.stringify(payload)
       });
-      if (res.ok) {
-        onRefresh();
-        alert('Pengaturan berhasil disimpan');
+
+      const contentType = res.headers.get('content-type') || '';
+      const savedSettings = contentType.includes('application/json') ? await res.json() : null;
+
+      if (!res.ok) {
+        throw new Error(savedSettings?.message || 'Gagal menyimpan pengaturan');
       }
+
+      if (savedSettings) {
+        onSettingsSaved(savedSettings);
+        setToken(savedSettings.fonnteToken || '');
+        setGroup(savedSettings.whatsappGroup || '');
+        setTemplateInstallation(savedSettings.templateInstallation || '');
+        setTemplateMaintenance(savedSettings.templateMaintenance || '');
+        setTemplateClosed(savedSettings.templateClosed || '');
+        setMediaRetentionDays(savedSettings.mediaRetentionDays || 60);
+      }
+
+      await onRefresh();
+      alert('Pengaturan berhasil disimpan');
     } catch (err) {
       console.error(err);
+      alert(err instanceof Error ? err.message : 'Gagal menyimpan pengaturan');
     } finally {
       setSaving(false);
     }
@@ -2607,7 +2599,7 @@ function SettingsView({ settings, onRefresh, user }: { settings: AppSettings | n
               </div>
 
               <div className="flex justify-end">
-                <Button onClick={handleSave} disabled={saving} className="px-8">
+                <Button type="button" onClick={handleSave} disabled={saving} className="px-8">
                   {saving ? 'Menyimpan...' : 'Simpan Pengaturan'}
                 </Button>
               </div>
