@@ -11,6 +11,7 @@ import {
   AlertCircle,
   ChevronRight,
   Filter,
+  Edit3,
   Search,
   Menu,
   X,
@@ -631,12 +632,14 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isTechPickerOpen, setIsTechPickerOpen] = useState(false);
-  const [filterType, setFilterType] = useState<'all' | TicketType>('maintenance');
+  const [filterType, setFilterType] = useState<'all' | TicketType>(showClosed ? 'installation' : 'maintenance');
+  const [billingFilter, setBillingFilter] = useState<'all' | 'entered' | 'not_entered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [mapMode, setMapMode] = useState<'street' | 'satellite' | 'hybrid'>('hybrid');
   const [isMapModeDropdownOpen, setIsMapModeDropdownOpen] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
+  const [ticketModalMode, setTicketModalMode] = useState<'action' | 'edit'>('action');
 
   const [newTicket, setNewTicket] = useState({
     type: 'installation' as TicketType,
@@ -658,10 +661,20 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     assignedTechnicianIds: [] as string[],
     reportAttachmentUrl: '',
     reportAttachmentName: '',
+    customerName: '',
+    phone: '',
+    address: '',
+    locationUrl: '',
+    package: '',
+    issue: '',
+    notes: '',
+    type: 'installation' as TicketType,
+    billingEntered: false,
   });
 
   const isFieldWorker = user.role === 'technician' || user.role === 'vendor';
   const isVendor = user.role === 'vendor';
+  const canEditTicket = user.role === 'admin' || user.role === 'superuser';
   const technicians = users.filter(u => u.role === 'technician' || !u.role);
   const workerUsers = users.filter(u => u.role === 'technician' || u.role === 'vendor' || !u.role);
 
@@ -687,11 +700,42 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       return true;
     })
     .filter(t => filterType === 'all' ? true : t.type === filterType)
+    .filter(t => {
+      if (!showClosed || t.type !== 'installation' || billingFilter === 'all') return true;
+      return billingFilter === 'entered' ? !!t.billingEntered : !t.billingEntered;
+    })
     .filter(t =>
       t.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.address.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (t.issue && t.issue.toLowerCase().includes(searchQuery.toLowerCase()))
     );
+
+  const openTicketModal = (mode: 'action' | 'edit') => {
+    if (!selectedTicket) return;
+    setTicketModalMode(mode);
+    setReport({
+      status: selectedTicket.status === 'open' && mode === 'action' ? 'completed' : selectedTicket.status,
+      report: selectedTicket.report || '',
+      technicianNotes: selectedTicket.technicianNotes || '',
+      assignedTechnicianIds: isVendor
+        ? [user.id]
+        : (selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0
+            ? selectedTicket.assignedTechnicianIds
+            : (user.role === 'technician' ? [user.id] : [])),
+      reportAttachmentUrl: selectedTicket.reportAttachmentUrl || '',
+      reportAttachmentName: selectedTicket.reportAttachmentName || '',
+      customerName: selectedTicket.customerName || '',
+      phone: selectedTicket.phone || '',
+      address: selectedTicket.address || '',
+      locationUrl: selectedTicket.locationUrl || '',
+      package: selectedTicket.package || '',
+      issue: selectedTicket.issue || '',
+      notes: selectedTicket.notes || '',
+      type: selectedTicket.type,
+      billingEntered: !!selectedTicket.billingEntered,
+    });
+    setIsReportModalOpen(true);
+  };
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -742,9 +786,25 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...report,
-          completedAt: report.status === 'completed' ? new Date().toISOString() : undefined
+        body: JSON.stringify(ticketModalMode === 'edit' ? {
+          customerName: report.customerName,
+          phone: report.phone,
+          address: report.address,
+          locationUrl: report.locationUrl,
+          package: report.package,
+          issue: report.issue,
+          notes: report.notes,
+          type: report.type,
+          billingEntered: report.billingEntered,
+        } : {
+          status: report.status,
+          report: report.report,
+          technicianNotes: report.technicianNotes,
+          assignedTechnicianIds: report.assignedTechnicianIds,
+          reportAttachmentUrl: report.reportAttachmentUrl,
+          reportAttachmentName: report.reportAttachmentName,
+          billingEntered: canEditTicket ? report.billingEntered : selectedTicket.billingEntered,
+          completedAt: report.status === 'completed' ? (selectedTicket.completedAt || new Date().toISOString()) : undefined
         })
       });
       if (res.ok) {
@@ -757,6 +817,15 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
           assignedTechnicianIds: [],
           reportAttachmentUrl: '',
           reportAttachmentName: '',
+          customerName: '',
+          phone: '',
+          address: '',
+          locationUrl: '',
+          package: '',
+          issue: '',
+          notes: '',
+          type: 'installation',
+          billingEntered: false,
         });
         onRefresh();
       }
@@ -801,6 +870,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
             <option value="installation">Pemasangan</option>
             <option value="maintenance">Maintenance</option>
           </Select>
+
+          {showClosed && filterType === 'installation' && (
+            <Select
+              className="w-auto"
+              value={billingFilter}
+              onChange={e => setBillingFilter(e.target.value as any)}
+            >
+              <option value="all">Semua Billing</option>
+              <option value="entered">Sudah Entry Billing</option>
+              <option value="not_entered">Belum Entry Billing</option>
+            </Select>
+          )}
 
           <div className="flex items-center bg-white rounded-lg border border-gray-300 p-1">
             <button
@@ -866,6 +947,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'} className="text-[10px] px-1.5 py-0">
                         {ticket.status}
                       </Badge>
+                      {showClosed && ticket.type === 'installation' && (
+                        <Badge variant={ticket.billingEntered ? 'success' : 'warning'} className="text-[10px] px-1.5 py-0">
+                          {ticket.billingEntered ? 'Billing OK' : 'Belum Billing'}
+                        </Badge>
+                      )}
                     </div>
 
                     <div>
@@ -1237,29 +1323,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                 </div>
               </div>
               <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex gap-3">
-                {(
-                  ((isFieldWorker || user.role === 'admin' || user.role === 'superuser') && selectedTicket.status !== 'completed') ||
-                  (user.role === 'superuser' && selectedTicket.status === 'completed')
-                ) && (
-                    <Button className="flex-1" onClick={() => {
-                      setReport({
-                        status: selectedTicket.status === 'open' ? 'completed' : selectedTicket.status,
-                        report: selectedTicket.report || '',
-                        technicianNotes: selectedTicket.technicianNotes || '',
-                        assignedTechnicianIds: isVendor
-                          ? [user.id]
-                          : (selectedTicket.assignedTechnicianIds && selectedTicket.assignedTechnicianIds.length > 0
-                              ? selectedTicket.assignedTechnicianIds
-                              : (user.role === 'technician' ? [user.id] : [])),
-                        reportAttachmentUrl: selectedTicket.reportAttachmentUrl || '',
-                        reportAttachmentName: selectedTicket.reportAttachmentName || '',
-                      });
-                      setIsReportModalOpen(true);
-                    }}>
-                      <Settings className="w-4 h-4" />
-                      {selectedTicket.status === 'completed' ? 'Edit Laporan' : 'Aksi'}
-                    </Button>
-                  )}
+                {selectedTicket.status !== 'completed' && (isFieldWorker || user.role === 'admin' || user.role === 'superuser') && (
+                  <Button className="flex-1" onClick={() => openTicketModal('action')}>
+                    <CheckCircle2 className="w-4 h-4" />
+                    Aksi
+                  </Button>
+                )}
+                {canEditTicket && (
+                  <Button variant="outline" className="flex-1" onClick={() => openTicketModal('edit')}>
+                    <Edit3 className="w-4 h-4" />
+                    Edit
+                  </Button>
+                )}
                 {user.role !== 'technician' && user.role !== 'vendor' && selectedTicket.status === 'open' && (
                   <Button
                     className="flex-1 bg-green-600 hover:bg-green-700"
@@ -1509,12 +1584,66 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
             >
               <form onSubmit={handleUpdateTicket}>
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                  <h3 className="text-xl font-bold text-gray-900">Laporan Penanganan</h3>
+                  <h3 className="text-xl font-bold text-gray-900">{ticketModalMode === 'edit' ? 'Edit Data Tiket' : 'Aksi / Laporan Penanganan'}</h3>
                   <button type="button" onClick={() => setIsReportModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
                 <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                  {ticketModalMode === 'edit' && (
+                  <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/40 space-y-3">
+                    <div className="flex items-center gap-2 text-blue-700 font-bold text-sm">
+                      <Edit3 className="w-4 h-4" />
+                      Edit Data Tiket
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Nama Pelanggan</label>
+                        <Input required value={report.customerName} onChange={e => setReport({ ...report, customerName: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Telepon</label>
+                        <Input required value={report.phone} onChange={e => setReport({ ...report, phone: e.target.value })} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Alamat</label>
+                      <Input required value={report.address} onChange={e => setReport({ ...report, address: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Link Lokasi</label>
+                      <Input value={report.locationUrl} onChange={e => setReport({ ...report, locationUrl: e.target.value })} />
+                    </div>
+                    {report.type === 'installation' ? (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Paket</label>
+                        <Input value={report.package} onChange={e => setReport({ ...report, package: e.target.value })} />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Kendala</label>
+                        <textarea className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]" value={report.issue} onChange={e => setReport({ ...report, issue: e.target.value })} />
+                      </div>
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Catatan Lapor</label>
+                      <textarea className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]" value={report.notes} onChange={e => setReport({ ...report, notes: e.target.value })} />
+                    </div>
+                    {report.type === 'installation' && (
+                      <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-blue-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          checked={report.billingEntered}
+                          onChange={e => setReport({ ...report, billingEntered: e.target.checked })}
+                        />
+                        <span className="text-sm font-medium text-gray-700">Sudah di-entry ke billing</span>
+                      </label>
+                    )}
+                  </div>
+                  )}
+                  {ticketModalMode === 'action' && (
+                  <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Status Akhir</label>
                     <Select value={report.status} onChange={e => setReport({ ...report, status: e.target.value as any })}>
@@ -1527,7 +1656,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                     <label className="block text-sm font-medium text-gray-700 mb-1">Laporan</label>
                     <textarea
                       className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[120px]"
-                      required
+                      required={report.status === 'completed'}
                       placeholder="Tuliskan laporan pekerjaan di sini..."
                       value={report.report}
                       onChange={e => setReport({ ...report, report: e.target.value })}
@@ -1612,9 +1741,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       />
                     </div>
                   </div>
+                  </>
+                  )}
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1">Kirim Laporan</Button>
+                  <Button type="submit" className="flex-1">{ticketModalMode === 'edit' ? 'Simpan Perubahan' : 'Kirim Laporan'}</Button>
                   <Button type="button" variant="outline" className="flex-1" onClick={() => setIsReportModalOpen(false)}>Batal</Button>
                 </div>
               </form>

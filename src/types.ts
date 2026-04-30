@@ -32,6 +32,7 @@ export interface Ticket {
   reportAttachmentName?: string;
   notes?: string;
   technicianNotes?: string;
+  billingEntered?: boolean;
 }
 
 export interface AppSettings {
