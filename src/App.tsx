@@ -73,6 +73,13 @@ const Input = ({ className, ...props }: React.InputHTMLAttributes<HTMLInputEleme
   <input className={cn('w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all', className)} {...props} />
 );
 
+const Textarea = ({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
+  <textarea
+    className={cn('w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]', className)}
+    {...props}
+  />
+);
+
 const Select = ({ className, children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
   <select className={cn('w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all bg-white', className)} {...props}>
     {children}
@@ -547,10 +554,43 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Tiket" value={stats.total} icon={TicketIcon} color="blue" />
-        <StatCard title="Tiket Terbuka" value={stats.open} icon={AlertCircle} color="yellow" />
-        <StatCard title="Dalam Proses" value={stats.inProgress} icon={Clock} color="orange" />
-        <StatCard title="Selesai" value={stats.completed} icon={CheckCircle2} color="green" />
+        <StatCard
+          title="Total Tiket"
+          value={stats.total}
+          icon={TicketIcon}
+          color="blue"
+          detail={renderTicketTypeDetail(stats.installation, stats.maintenance)}
+        />
+        <StatCard
+          title="Tiket Terbuka"
+          value={stats.open}
+          icon={AlertCircle}
+          color="yellow"
+          detail={renderTicketTypeDetail(
+            tickets.filter(t => t.status === 'open' && (user.role === 'technician' || user.role === 'vendor' ? true : true) && t.type === 'installation').length,
+            tickets.filter(t => t.status === 'open' && (user.role === 'technician' || user.role === 'vendor' ? true : true) && t.type === 'maintenance').length
+          )}
+        />
+        <StatCard
+          title="Dalam Proses"
+          value={stats.inProgress}
+          icon={Clock}
+          color="orange"
+          detail={renderTicketTypeDetail(
+            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'in-progress' && t.type === 'installation').length,
+            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'in-progress' && t.type === 'maintenance').length
+          )}
+        />
+        <StatCard
+          title="Selesai"
+          value={stats.completed}
+          icon={CheckCircle2}
+          color="green"
+          detail={renderTicketTypeDetail(
+            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'completed' && t.type === 'installation').length,
+            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'completed' && t.type === 'maintenance').length
+          )}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -592,7 +632,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
   );
 }
 
-function StatCard({ title, value, icon: Icon, color }: { title: string; value: number; icon: any; color: 'blue' | 'yellow' | 'orange' | 'green' }) {
+function StatCard({ title, value, icon: Icon, color, detail }: { title: string; value: number; icon: any; color: 'blue' | 'yellow' | 'orange' | 'green'; detail?: React.ReactNode }) {
   const colors = {
     blue: 'bg-blue-50 text-blue-600',
     yellow: 'bg-yellow-50 text-yellow-600',
@@ -600,14 +640,17 @@ function StatCard({ title, value, icon: Icon, color }: { title: string; value: n
     green: 'bg-green-50 text-green-600',
   };
   return (
-    <Card className="p-6 flex items-center gap-4">
-      <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", colors[color])}>
-        <Icon className="w-6 h-6" />
+    <Card className="p-6">
+      <div className="flex items-center gap-4">
+        <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", colors[color])}>
+          <Icon className="w-6 h-6" />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-gray-500">{title}</p>
+          <p className="text-2xl font-bold text-gray-900">{value}</p>
+        </div>
       </div>
-      <div>
-        <p className="text-sm font-medium text-gray-500">{title}</p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
-      </div>
+      {detail}
     </Card>
   );
 }
@@ -627,10 +670,33 @@ function ProgressItem({ label, value, total, color }: { label: string; value: nu
   );
 }
 
+const renderTicketTypeDetail = (installation: number, maintenance: number) => (
+  <div className="mt-3 flex flex-wrap gap-2">
+    <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+      Pemasangan Baru: {installation}
+    </span>
+    <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
+      Maintenance: {maintenance}
+    </span>
+  </div>
+);
+
+const preventImplicitFormSubmit = (e: React.KeyboardEvent<HTMLFormElement>) => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+
+  const target = e.target as HTMLElement | null;
+  const tagName = target?.tagName?.toLowerCase();
+
+  if (tagName === 'textarea' || tagName === 'button') return;
+
+  e.preventDefault();
+};
+
 function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { tickets: Ticket[]; user: User; users: User[]; onRefresh: () => void; showClosed?: boolean }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isEditTicketModalOpen, setIsEditTicketModalOpen] = useState(false);
   const [isTechPickerOpen, setIsTechPickerOpen] = useState(false);
   const [filterType, setFilterType] = useState<'all' | TicketType>(showClosed ? 'installation' : 'maintenance');
   const [billingFilter, setBillingFilter] = useState<'all' | 'entered' | 'not_entered'>('all');
@@ -672,6 +738,21 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     billingEntered: false,
   });
 
+  const [editTicket, setEditTicket] = useState({
+    type: 'installation' as TicketType,
+    status: 'open' as TicketStatus,
+    customerName: '',
+    address: '',
+    locationUrl: '',
+    phone: '',
+    issue: '',
+    package: '',
+    notes: '',
+    assignedTechnicianIds: [] as string[],
+    attachmentUrl: '',
+    attachmentName: '',
+  });
+
   const isFieldWorker = user.role === 'technician' || user.role === 'vendor';
   const isVendor = user.role === 'vendor';
   const canEditTicket = user.role === 'admin' || user.role === 'superuser';
@@ -695,7 +776,13 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     .filter(t => showClosed ? t.status === 'completed' : t.status !== 'completed')
     .filter(t => {
       if ((user.role === 'technician' || user.role === 'vendor')) {
-        return t.status === 'open';
+        const isMainTechnician = t.technicianId === user.id;
+        const isAssignedTechnician = t.assignedTechnicianIds?.includes(user.id);
+
+        if (t.status === 'open') return true;
+        if (t.status === 'in-progress') return isMainTechnician || isAssignedTechnician;
+
+        return false;
       }
       return true;
     })
@@ -827,6 +914,33 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
           type: 'installation',
           billingEntered: false,
         });
+        onRefresh();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleEditTicketSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTicket) return;
+
+    try {
+      const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...editTicket,
+          completedAt: editTicket.status === 'completed'
+            ? (selectedTicket.completedAt || new Date().toISOString())
+            : undefined
+        })
+      });
+
+      if (res.ok) {
+        const updatedTicket = await res.json();
+        setSelectedTicket(updatedTicket);
+        setIsEditTicketModalOpen(false);
         onRefresh();
       }
     } catch (err) {
@@ -1383,7 +1497,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
               exit={{ opacity: 0, y: 20 }}
               className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
             >
-              <form onSubmit={handleCreateTicket}>
+              <form onSubmit={handleCreateTicket} onKeyDown={preventImplicitFormSubmit}>
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                   <h3 className="text-xl font-bold text-gray-900">Buat Tiket Baru</h3>
                   <button type="button" onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full">
@@ -1497,8 +1611,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   ) : (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Kendala</label>
-                      <textarea
-                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]"
+                      <Textarea
                         value={newTicket.issue}
                         onChange={e => setNewTicket({ ...newTicket, issue: e.target.value })}
                       />
@@ -1506,8 +1619,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Catatan / Note</label>
-                    <textarea
-                      className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]"
+                    <Textarea
                       value={newTicket.notes}
                       onChange={e => setNewTicket({ ...newTicket, notes: e.target.value })}
                       placeholder="Tambahkan catatan tambahan jika ada..."
@@ -1565,6 +1677,155 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
         )}
       </AnimatePresence>
 
+      {/* Edit Completed Ticket Modal */}
+      <AnimatePresence>
+        {isEditTicketModalOpen && selectedTicket && (
+          <div className="fixed inset-0 z-[108] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsEditTicketModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <form onSubmit={handleEditTicketSubmit} onKeyDown={preventImplicitFormSubmit}>
+                <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                  <h3 className="text-xl font-bold text-gray-900">Edit Data Tiket Selesai</h3>
+                  <button type="button" onClick={() => setIsEditTicketModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Tipe Tiket</label>
+                      <Select value={editTicket.type} onChange={e => setEditTicket({ ...editTicket, type: e.target.value as TicketType })}>
+                        <option value="installation">Pemasangan Baru</option>
+                        <option value="maintenance">Maintenance</option>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                      <Select value={editTicket.status} onChange={e => setEditTicket({ ...editTicket, status: e.target.value as TicketStatus })}>
+                        <option value="open">Open</option>
+                        <option value="in-progress">In Progress</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Nama Pelanggan</label>
+                      <Input required value={editTicket.customerName} onChange={e => setEditTicket({ ...editTicket, customerName: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon</label>
+                      <Input required value={editTicket.phone} onChange={e => setEditTicket({ ...editTicket, phone: e.target.value })} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Alamat</label>
+                    <Textarea value={editTicket.address} onChange={e => setEditTicket({ ...editTicket, address: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Link Lokasi</label>
+                    <Input value={editTicket.locationUrl} onChange={e => setEditTicket({ ...editTicket, locationUrl: e.target.value })} placeholder="https://maps.google.com/..." />
+                  </div>
+                  {editTicket.type === 'installation' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Paket</label>
+                      <Input value={editTicket.package} onChange={e => setEditTicket({ ...editTicket, package: e.target.value, issue: '' })} />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Kendala</label>
+                      <Textarea value={editTicket.issue} onChange={e => setEditTicket({ ...editTicket, issue: e.target.value, package: '' })} />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Catatan</label>
+                    <Textarea value={editTicket.notes} onChange={e => setEditTicket({ ...editTicket, notes: e.target.value })} placeholder="Tambahkan catatan tambahan jika perlu..." />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Pelaksana Pekerjaan</label>
+                    <button
+                      type="button"
+                      onClick={() => setIsTechPickerOpen(true)}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
+                    >
+                      <div className="flex flex-wrap gap-1">
+                        {editTicket.assignedTechnicianIds.length > 0 ? (
+                          editTicket.assignedTechnicianIds.map(id => (
+                            <span key={id} className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
+                              {workerUsers.find(t => t.id === id)?.name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-gray-400 italic">Pilih teknisi...</span>
+                        )}
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                    </button>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Upload File Pendukung (Maks 10MB)</label>
+                    <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-xl hover:border-blue-400 transition-colors cursor-pointer relative">
+                      <div className="space-y-1 text-center">
+                        <Paperclip className="mx-auto h-10 w-10 text-gray-400" />
+                        <div className="flex text-sm text-gray-600">
+                          <span className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500">
+                            {editTicket.attachmentName || "Pilih file untuk diunggah"}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500">PNG, JPG, PDF up to 10MB</p>
+                      </div>
+                      <input
+                        type="file"
+                        className="absolute inset-0 opacity-0 cursor-pointer"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            if (file.size > 10 * 1024 * 1024) {
+                              alert("Ukuran file maksimal 10MB");
+                              return;
+                            }
+                            const formData = new FormData();
+                            formData.append("file", file);
+                            try {
+                              const res = await fetch("/api/upload", {
+                                method: "POST",
+                                body: formData,
+                              });
+                              if (res.ok) {
+                                const data = await res.json();
+                                setEditTicket({ ...editTicket, attachmentUrl: data.url, attachmentName: data.name });
+                              }
+                            } catch (err) {
+                              console.error(err);
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                  <Button type="submit" className="flex-1">Simpan Perubahan</Button>
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsEditTicketModalOpen(false)}>Batal</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Report Modal */}
       <AnimatePresence>
         {isReportModalOpen && (
@@ -1582,7 +1843,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
               exit={{ opacity: 0, y: 20 }}
               className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
             >
-              <form onSubmit={handleUpdateTicket}>
+              <form onSubmit={handleUpdateTicket} onKeyDown={preventImplicitFormSubmit}>
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                   <h3 className="text-xl font-bold text-gray-900">{ticketModalMode === 'edit' ? 'Edit Data Tiket' : 'Aksi / Laporan Penanganan'}</h3>
                   <button type="button" onClick={() => setIsReportModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full">
@@ -1654,17 +1915,22 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Laporan</label>
-                    <textarea
-                      className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[120px]"
-                      required={report.status === 'completed'}
-                      placeholder="Tuliskan laporan pekerjaan di sini..."
-                      value={report.report}
-                      onChange={e => setReport({ ...report, report: e.target.value })}
-                    />
+                <Textarea
+                  className="min-h-[120px]"
+                  required
+                  placeholder="Tuliskan laporan pekerjaan di sini..."
+                  value={report.report}
+                  onChange={e => setReport({ ...report, report: e.target.value })}
+                />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Catatan Tambahan</label>
-                    <Input value={report.technicianNotes} onChange={e => setReport({ ...report, technicianNotes: e.target.value })} />
+                    <Textarea
+                      className="min-h-[96px]"
+                      placeholder="Tambahkan catatan tambahan di sini..."
+                      value={report.technicianNotes}
+                      onChange={e => setReport({ ...report, technicianNotes: e.target.value })}
+                    />
                   </div>
 
                   <div>
@@ -1784,12 +2050,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                     <input
                       type="checkbox"
                       className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      checked={report.assignedTechnicianIds.includes(t.id)}
+                      checked={(isEditTicketModalOpen ? editTicket.assignedTechnicianIds : report.assignedTechnicianIds).includes(t.id)}
                       onChange={(e) => {
+                        const sourceIds = isEditTicketModalOpen ? editTicket.assignedTechnicianIds : report.assignedTechnicianIds;
                         const ids = e.target.checked
-                          ? [...report.assignedTechnicianIds, t.id]
-                          : report.assignedTechnicianIds.filter(id => id !== t.id);
-                        setReport({ ...report, assignedTechnicianIds: ids });
+                          ? [...sourceIds, t.id]
+                          : sourceIds.filter(id => id !== t.id);
+
+                        if (isEditTicketModalOpen) {
+                          setEditTicket({ ...editTicket, assignedTechnicianIds: ids });
+                        } else {
+                          setReport({ ...report, assignedTechnicianIds: ids });
+                        }
                       }}
                     />
                   </label>
