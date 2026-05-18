@@ -41,6 +41,7 @@ const initialData = {
     whatsappGroup: "",
     templateInstallation: "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}{link}",
     templateMaintenance: "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}{link}",
+    templateDismantle: "Tiket Dismantle Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nAlasan: {detail}{link}",
     templateClosed: "Tiket {id} Selesai!\nPelanggan: {customerName}\nStatus: Selesai\nLaporan: {report}{link}",
     mediaRetentionDays: 60,
   },
@@ -76,8 +77,8 @@ function addLog(action: string, user: string, details: string) {
 
 // WhatsApp Helper
 function formatMessage(template: string, ticket: any, db: any, origin?: string) {
-  const typeLabel = ticket.type === "maintenance" ? "Maintenance" : "Pemasangan Baru";
-  const detailLabel = ticket.type === "maintenance" ? `Kendala: ${ticket.issue}` : `Paket: ${ticket.package}`;
+  const typeLabel = ticket.type === "maintenance" ? "Maintenance" : ticket.type === "dismantle" ? "Dismantle / Pelepasan" : "Pemasangan Baru";
+  const detailLabel = ticket.type === "maintenance" ? `Kendala: ${ticket.issue}` : ticket.type === "dismantle" ? `Alasan: ${ticket.issue}` : `Paket: ${ticket.package}`;
   const locationMsg = ticket.locationUrl ? `\nLokasi: ${ticket.locationUrl}` : "";
   
   const ticketLink = origin ? `\nLink Tiket: ${origin}/?ticketId=${ticket.id}` : "";
@@ -235,7 +236,26 @@ app.get("/api/logs", (req, res) => {
 
 app.get("/api/tickets", (req, res) => {
   const db = getDB();
-  res.json(db.tickets);
+  const userId = req.query.userId as string;
+  const userRole = req.query.role as string;
+
+  let filteredTickets = db.tickets;
+
+  // If technician or vendor, only show tickets assigned to them
+  if (userId && (userRole === 'technician' || userRole === 'vendor')) {
+    filteredTickets = db.tickets.filter((t: any) => {
+      // Show open tickets to all technicians
+      if (t.status === 'open' && (!t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0)) {
+        return true;
+      }
+      // Show tickets where they are assigned
+      const isAssigned = t.assignedTechnicianIds?.includes(userId) || t.technicianId === userId;
+      return isAssigned;
+    });
+  }
+  // admin, supervisor, superuser can see all tickets
+
+  res.json(filteredTickets);
 });
 
 app.post("/api/tickets", async (req, res) => {
@@ -260,12 +280,21 @@ app.post("/api/tickets", async (req, res) => {
   // Notify via WhatsApp if it's maintenance or if group is configured
   const template = newTicket.type === "maintenance" 
     ? (db.settings.templateMaintenance || "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}")
+    : newTicket.type === "dismantle"
+    ? (db.settings.templateDismantle || "Tiket Dismantle Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nAlasan: {detail}")
     : (db.settings.templateInstallation || "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}");
   
   const message = formatMessage(template, newTicket, db, req.headers.origin);
 
-  // Send to technician if maintenance
-  if (newTicket.type === "maintenance") {
+  // Send to assigned technicians
+  if (newTicket.assignedTechnicianIds && newTicket.assignedTechnicianIds.length > 0) {
+    for (const techId of newTicket.assignedTechnicianIds) {
+      const tech = db.users.find((u: any) => u.id === techId);
+      if (tech && tech.phone) {
+        await sendWhatsApp(tech.phone, message);
+      }
+    }
+  } else if (newTicket.technicianId) {
     const tech = db.users.find((u: any) => u.id === newTicket.technicianId);
     if (tech && tech.phone) {
       await sendWhatsApp(tech.phone, message);
@@ -291,6 +320,8 @@ app.post("/api/tickets/:id/resend-notification", async (req, res) => {
 
   const template = ticket.type === "maintenance"
     ? (db.settings.templateMaintenance || "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}")
+    : ticket.type === "dismantle"
+    ? (db.settings.templateDismantle || "Tiket Dismantle Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nAlasan: {detail}")
     : (db.settings.templateInstallation || "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}");
     
   const message = `[REMINDER] ${formatMessage(template, ticket, db, req.headers.origin)}`;

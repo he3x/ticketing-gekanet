@@ -8,7 +8,7 @@ export interface User {
   phone?: string;
 }
 
-export type TicketType = 'installation' | 'maintenance';
+export type TicketType = 'installation' | 'maintenance' | 'dismantle';
 export type TicketStatus = 'open' | 'in-progress' | 'completed' | 'cancelled';
 
 export interface Ticket {
@@ -40,6 +40,7 @@ export interface AppSettings {
   whatsappGroup?: string;
   templateInstallation?: string;
   templateMaintenance?: string;
+  templateDismantle?: string;
   templateClosed?: string;
   mediaRetentionDays?: number;
 }
