@@ -149,7 +149,8 @@ export default function App() {
     if (!activeUser) return;
 
     try {
-      const endpoints = ['/api/tickets'];
+      const ticketUrl = `/api/tickets?userId=${activeUser.id}&role=${activeUser.role}`;
+      const endpoints = [ticketUrl];
 
       // Only superuser can fetch full user list and settings
       if (activeUser?.role === 'superuser') {
@@ -519,6 +520,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
       completed: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.status === 'completed').length,
       maintenance: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'maintenance').length,
       installation: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'installation').length,
+      dismantle: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'dismantle').length,
     }
     : {
       total: tickets.length,
@@ -527,6 +529,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
       completed: tickets.filter(t => t.status === 'completed').length,
       maintenance: tickets.filter(t => t.type === 'maintenance').length,
       installation: tickets.filter(t => t.type === 'installation').length,
+      dismantle: tickets.filter(t => t.type === 'dismantle').length,
     };
 
   const userTickets = (user.role === 'technician' || user.role === 'vendor')
@@ -602,9 +605,9 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
                 <div className="flex items-center gap-4">
                   <div className={cn(
                     "w-10 h-10 rounded-lg flex items-center justify-center",
-                    ticket.type === 'installation' ? "bg-blue-100 text-blue-600" : "bg-orange-100 text-orange-600"
+                    ticket.type === 'installation' ? "bg-blue-100 text-blue-600" : ticket.type === 'dismantle' ? "bg-red-100 text-red-600" : "bg-orange-100 text-orange-600"
                   )}>
-                    {ticket.type === 'installation' ? <Plus className="w-5 h-5" /> : <Settings className="w-5 h-5" />}
+                    {ticket.type === 'installation' ? <Plus className="w-5 h-5" /> : ticket.type === 'dismantle' ? <Trash2 className="w-5 h-5" /> : <Settings className="w-5 h-5" />}
                   </div>
                   <div>
                     <p className="font-bold text-gray-900">{ticket.customerName}</p>
@@ -625,6 +628,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
           <div className="space-y-6">
             <ProgressItem label="Pemasangan Baru" value={stats.installation} total={stats.total} color="bg-blue-500" />
             <ProgressItem label="Maintenance" value={stats.maintenance} total={stats.total} color="bg-orange-500" />
+            <ProgressItem label="Dismantle" value={stats.dismantle} total={stats.total} color="bg-red-500" />
           </div>
         </Card>
       </div>
@@ -670,7 +674,7 @@ function ProgressItem({ label, value, total, color }: { label: string; value: nu
   );
 }
 
-const renderTicketTypeDetail = (installation: number, maintenance: number) => (
+const renderTicketTypeDetail = (installation: number, maintenance: number, dismantle?: number) => (
   <div className="mt-3 flex flex-wrap gap-2">
     <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
       Pemasangan Baru: {installation}
@@ -678,6 +682,11 @@ const renderTicketTypeDetail = (installation: number, maintenance: number) => (
     <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
       Maintenance: {maintenance}
     </span>
+    {dismantle !== undefined && dismantle > 0 && (
+      <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">
+        Dismantle: {dismantle}
+      </span>
+    )}
   </div>
 );
 
@@ -718,6 +727,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     notes: '',
     attachmentUrl: '',
     attachmentName: '',
+    assignedTechnicianIds: [] as string[],
   });
 
   const [report, setReport] = useState({
@@ -779,6 +789,12 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
         const isMainTechnician = t.technicianId === user.id;
         const isAssignedTechnician = t.assignedTechnicianIds?.includes(user.id);
 
+        // If ticket has assigned technicians, only show to those technicians
+        if (t.assignedTechnicianIds && t.assignedTechnicianIds.length > 0) {
+          return isAssignedTechnician;
+        }
+
+        // Open tickets without assigned technicians are visible to all
         if (t.status === 'open') return true;
         if (t.status === 'in-progress') return isMainTechnician || isAssignedTechnician;
 
@@ -859,6 +875,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
           notes: '',
           attachmentUrl: '',
           attachmentName: '',
+          assignedTechnicianIds: [],
         });
       }
     } catch (err) {
@@ -983,6 +1000,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
             <option value="all">Semua Tipe</option>
             <option value="installation">Pemasangan</option>
             <option value="maintenance">Maintenance</option>
+            <option value="dismantle">Dismantle</option>
           </Select>
 
           {showClosed && filterType === 'installation' && (
@@ -1046,7 +1064,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                           {ticket.address}
                         </p>
                         <p className="text-[10px] font-medium text-blue-600 mt-0.5 line-clamp-1">
-                          {ticket.type === 'installation' ? `Paket: ${ticket.package}` : `Kendala: ${ticket.issue}`}
+                          {ticket.type === 'installation' ? `Paket: ${ticket.package}` : ticket.type === 'dismantle' ? `Alasan: ${ticket.issue}` : `Kendala: ${ticket.issue}`}
                         </p>
                       </div>
                     </div>
@@ -1055,8 +1073,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                 ) : (
                   <div className="p-4 space-y-3">
                     <div className="flex justify-between items-start">
-                      <Badge variant={ticket.type === 'installation' ? 'info' : 'warning'} className="text-[10px] px-1.5 py-0">
-                        {ticket.type === 'installation' ? 'Pemasangan' : 'Maintenance'}
+                      <Badge variant={ticket.type === 'installation' ? 'info' : ticket.type === 'dismantle' ? 'danger' : 'warning'} className="text-[10px] px-1.5 py-0">
+                        {ticket.type === 'installation' ? 'Pemasangan' : ticket.type === 'dismantle' ? 'Dismantle' : 'Maintenance'}
                       </Badge>
                       <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'} className="text-[10px] px-1.5 py-0">
                         {ticket.status}
@@ -1206,8 +1224,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   <Popup>
                     <div className="p-1 min-w-[200px]">
                       <div className="flex justify-between items-start mb-2">
-                        <Badge variant={ticket.type === 'installation' ? 'info' : 'warning'}>
-                          {ticket.type === 'installation' ? 'Pemasangan' : 'Maintenance'}
+                        <Badge variant={ticket.type === 'installation' ? 'info' : ticket.type === 'dismantle' ? 'danger' : 'warning'}>
+                          {ticket.type === 'installation' ? 'Pemasangan' : ticket.type === 'dismantle' ? 'Dismantle' : 'Maintenance'}
                         </Badge>
                         <Badge variant={ticket.status === 'completed' ? 'success' : ticket.status === 'open' ? 'danger' : 'warning'}>
                           {ticket.status}
@@ -1279,7 +1297,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
                     <p className="text-xs text-gray-500 uppercase font-bold mb-1">Tipe</p>
-                    <Badge variant={selectedTicket.type === 'installation' ? 'info' : 'warning'}>{selectedTicket.type}</Badge>
+                    <Badge variant={selectedTicket.type === 'installation' ? 'info' : selectedTicket.type === 'dismantle' ? 'danger' : 'warning'}>{selectedTicket.type === 'installation' ? 'Pemasangan' : selectedTicket.type === 'dismantle' ? 'Dismantle' : 'Maintenance'}</Badge>
                   </div>
                 </div>
 
@@ -1405,6 +1423,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
 
                   {selectedTicket.type === 'installation' ? (
                     <DetailItem icon={Plus} label="Paket" value={selectedTicket.package || '-'} />
+                  ) : selectedTicket.type === 'dismantle' ? (
+                    <DetailItem icon={Trash2} label="Alasan Pelepasan" value={selectedTicket.issue || '-'} />
                   ) : (
                     <DetailItem icon={AlertCircle} label="Kendala" value={selectedTicket.issue || '-'} />
                   )}
@@ -1510,6 +1530,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                     <Select value={newTicket.type} onChange={e => setNewTicket({ ...newTicket, type: e.target.value as any })}>
                       <option value="installation">Pemasangan Baru</option>
                       <option value="maintenance">Maintenance</option>
+                      <option value="dismantle">Dismantle / Pelepasan</option>
                     </Select>
                   </div>
                   <div>
@@ -1608,6 +1629,15 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <label className="block text-sm font-medium text-gray-700 mb-1">Paket</label>
                       <Input value={newTicket.package} onChange={e => setNewTicket({ ...newTicket, package: e.target.value })} placeholder="Contoh: 20 Mbps" />
                     </div>
+                  ) : newTicket.type === 'dismantle' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Alasan Pelepasan</label>
+                      <Textarea
+                        value={newTicket.issue}
+                        onChange={e => setNewTicket({ ...newTicket, issue: e.target.value })}
+                        placeholder="Contoh: Pelanggan berhenti berlangganan"
+                      />
+                    </div>
                   ) : (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Kendala</label>
@@ -1617,6 +1647,48 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       />
                     </div>
                   )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Teknisi yang Ditugaskan</label>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2 min-h-[36px] p-2 border border-gray-200 rounded-lg bg-gray-50">
+                        {newTicket.assignedTechnicianIds.length > 0 ? (
+                          newTicket.assignedTechnicianIds.map(id => (
+                            <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+                              {workerUsers.find(t => t.id === id)?.name || 'Unknown'}
+                              <button
+                                type="button"
+                                onClick={() => setNewTicket({ ...newTicket, assignedTechnicianIds: newTicket.assignedTechnicianIds.filter(tid => tid !== id) })}
+                                className="ml-1 text-blue-500 hover:text-blue-800"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-gray-400 italic">Belum ada teknisi dipilih</span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 max-h-[120px] overflow-y-auto border border-gray-200 rounded-lg p-2">
+                        {workerUsers.map(tech => (
+                          <label key={tech.id} className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-gray-50 cursor-pointer text-sm">
+                            <input
+                              type="checkbox"
+                              checked={newTicket.assignedTechnicianIds.includes(tech.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setNewTicket({ ...newTicket, assignedTechnicianIds: [...newTicket.assignedTechnicianIds, tech.id] });
+                                } else {
+                                  setNewTicket({ ...newTicket, assignedTechnicianIds: newTicket.assignedTechnicianIds.filter(id => id !== tech.id) });
+                                }
+                              }}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="truncate">{tech.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Catatan / Note</label>
                     <Textarea
@@ -1708,6 +1780,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <Select value={editTicket.type} onChange={e => setEditTicket({ ...editTicket, type: e.target.value as TicketType })}>
                         <option value="installation">Pemasangan Baru</option>
                         <option value="maintenance">Maintenance</option>
+                        <option value="dismantle">Dismantle / Pelepasan</option>
                       </Select>
                     </div>
                     <div>
@@ -1742,6 +1815,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Paket</label>
                       <Input value={editTicket.package} onChange={e => setEditTicket({ ...editTicket, package: e.target.value, issue: '' })} />
+                    </div>
+                  ) : editTicket.type === 'dismantle' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Alasan Pelepasan</label>
+                      <Textarea value={editTicket.issue} onChange={e => setEditTicket({ ...editTicket, issue: e.target.value, package: '' })} placeholder="Contoh: Pelanggan berhenti berlangganan" />
                     </div>
                   ) : (
                     <div>
@@ -1879,6 +1957,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Paket</label>
                         <Input value={report.package} onChange={e => setReport({ ...report, package: e.target.value })} />
+                      </div>
+                    ) : report.type === 'dismantle' ? (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Alasan Pelepasan</label>
+                        <textarea className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[80px]" value={report.issue} onChange={e => setReport({ ...report, issue: e.target.value })} placeholder="Contoh: Pelanggan berhenti berlangganan" />
                       </div>
                     ) : (
                       <div>
@@ -2436,9 +2519,9 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
               <div className="flex items-center gap-4">
                 <div className={cn(
                   "w-10 h-10 rounded-lg flex items-center justify-center",
-                  ticket.type === 'installation' ? "bg-blue-100 text-blue-600" : "bg-orange-100 text-orange-600"
+                  ticket.type === 'installation' ? "bg-blue-100 text-blue-600" : ticket.type === 'dismantle' ? "bg-red-100 text-red-600" : "bg-orange-100 text-orange-600"
                 )}>
-                  {ticket.type === 'installation' ? <Plus className="w-5 h-5" /> : <Settings className="w-5 h-5" />}
+                  {ticket.type === 'installation' ? <Plus className="w-5 h-5" /> : ticket.type === 'dismantle' ? <Trash2 className="w-5 h-5" /> : <Settings className="w-5 h-5" />}
                 </div>
                 <div>
                   <p className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">{ticket.customerName}</p>
@@ -2498,7 +2581,7 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
                     <p className="text-xs text-gray-500 uppercase font-bold mb-1">Tipe</p>
-                    <Badge variant={selectedTicket.type === 'installation' ? 'info' : 'warning'}>{selectedTicket.type}</Badge>
+                    <Badge variant={selectedTicket.type === 'installation' ? 'info' : selectedTicket.type === 'dismantle' ? 'danger' : 'warning'}>{selectedTicket.type === 'installation' ? 'Pemasangan' : selectedTicket.type === 'dismantle' ? 'Dismantle' : 'Maintenance'}</Badge>
                   </div>
                 </div>
 
