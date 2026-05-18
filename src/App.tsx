@@ -512,15 +512,18 @@ const extractCoordinates = (url?: string): [number, number] | null => {
 // --- Sub-Views ---
 
 function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User; users: User[] }) {
+  const isAssignedToUser = (t: Ticket) => t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id);
+  const isUserOpenTicket = (t: Ticket) => t.status === 'open' && (isAssignedToUser(t) || !t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0);
+
   const stats = (user.role === 'technician' || user.role === 'vendor')
     ? {
-      total: tickets.filter(t => t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)).length,
-      open: tickets.filter(t => t.status === 'open').length,
-      inProgress: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.status === 'in-progress').length,
-      completed: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.status === 'completed').length,
-      maintenance: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'maintenance').length,
-      installation: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'installation').length,
-      dismantle: tickets.filter(t => (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) && t.type === 'dismantle').length,
+      total: tickets.filter(t => isAssignedToUser(t) || (t.status === 'open' && (!t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0))).length,
+      open: tickets.filter(t => isUserOpenTicket(t)).length,
+      inProgress: tickets.filter(t => isAssignedToUser(t) && t.status === 'in-progress').length,
+      completed: tickets.filter(t => isAssignedToUser(t) && t.status === 'completed').length,
+      maintenance: tickets.filter(t => (isAssignedToUser(t) || (t.status === 'open' && (!t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0))) && t.type === 'maintenance').length,
+      installation: tickets.filter(t => (isAssignedToUser(t) || (t.status === 'open' && (!t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0))) && t.type === 'installation').length,
+      dismantle: tickets.filter(t => (isAssignedToUser(t) || (t.status === 'open' && (!t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0))) && t.type === 'dismantle').length,
     }
     : {
       total: tickets.length,
@@ -562,7 +565,7 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
           value={stats.total}
           icon={TicketIcon}
           color="blue"
-          detail={renderTicketTypeDetail(stats.installation, stats.maintenance)}
+          detail={renderTicketTypeDetail(stats.installation, stats.maintenance, stats.dismantle)}
         />
         <StatCard
           title="Tiket Terbuka"
@@ -570,8 +573,9 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
           icon={AlertCircle}
           color="yellow"
           detail={renderTicketTypeDetail(
-            tickets.filter(t => t.status === 'open' && (user.role === 'technician' || user.role === 'vendor' ? true : true) && t.type === 'installation').length,
-            tickets.filter(t => t.status === 'open' && (user.role === 'technician' || user.role === 'vendor' ? true : true) && t.type === 'maintenance').length
+            tickets.filter(t => t.status === 'open' && ((user.role === 'technician' || user.role === 'vendor') ? (isAssignedToUser(t) || !t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0) : true) && t.type === 'installation').length,
+            tickets.filter(t => t.status === 'open' && ((user.role === 'technician' || user.role === 'vendor') ? (isAssignedToUser(t) || !t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0) : true) && t.type === 'maintenance').length,
+            tickets.filter(t => t.status === 'open' && ((user.role === 'technician' || user.role === 'vendor') ? (isAssignedToUser(t) || !t.assignedTechnicianIds || t.assignedTechnicianIds.length === 0) : true) && t.type === 'dismantle').length
           )}
         />
         <StatCard
@@ -580,8 +584,9 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
           icon={Clock}
           color="orange"
           detail={renderTicketTypeDetail(
-            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'in-progress' && t.type === 'installation').length,
-            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'in-progress' && t.type === 'maintenance').length
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'in-progress' && t.type === 'installation').length,
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'in-progress' && t.type === 'maintenance').length,
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'in-progress' && t.type === 'dismantle').length
           )}
         />
         <StatCard
@@ -590,8 +595,9 @@ function DashboardView({ tickets, user, users }: { tickets: Ticket[]; user: User
           icon={CheckCircle2}
           color="green"
           detail={renderTicketTypeDetail(
-            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'completed' && t.type === 'installation').length,
-            tickets.filter(t => (user.role === 'technician' || user.role === 'vendor' ? (t.technicianId === user.id || t.assignedTechnicianIds?.includes(user.id)) : true) && t.status === 'completed' && t.type === 'maintenance').length
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'completed' && t.type === 'installation').length,
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'completed' && t.type === 'maintenance').length,
+            tickets.filter(t => ((user.role === 'technician' || user.role === 'vendor') ? isAssignedToUser(t) : true) && t.status === 'completed' && t.type === 'dismantle').length
           )}
         />
       </div>
@@ -682,7 +688,7 @@ const renderTicketTypeDetail = (installation: number, maintenance: number, disma
     <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
       Maintenance: {maintenance}
     </span>
-    {dismantle !== undefined && dismantle > 0 && (
+    {dismantle !== undefined && (
       <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">
         Dismantle: {dismantle}
       </span>
@@ -1101,7 +1107,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       </div>
                       <div className="flex items-center gap-2">
                         <UserIcon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                        <span className="truncate">{
+                          ticket.assignedTechnicianIds && ticket.assignedTechnicianIds.length > 0
+                            ? ticket.assignedTechnicianIds.map(id => workerUsers.find(u => u.id === id)?.name || 'Unknown').join(', ')
+                            : (technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned')
+                        }</span>
                       </div>
                     </div>
 
@@ -1239,7 +1249,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       <div className="space-y-1 text-xs text-gray-600 mb-3">
                         <div className="flex items-center gap-2">
                           <UserIcon className="w-3 h-3 text-gray-400" />
-                          <span>{technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned'}</span>
+                          <span>{
+                            ticket.assignedTechnicianIds && ticket.assignedTechnicianIds.length > 0
+                              ? ticket.assignedTechnicianIds.map(id => workerUsers.find(u => u.id === id)?.name || 'Unknown').join(', ')
+                              : (technicians.find(t => t.id === ticket.technicianId)?.name || 'Unassigned')
+                          }</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <AlertCircle className="w-3 h-3 text-gray-400" />
