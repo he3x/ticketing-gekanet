@@ -1804,7 +1804,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1" disabled={isCreatingTicket}>
+                  <Button 
+                    type="submit" 
+                    className="flex-1" 
+                    disabled={isCreatingTicket}
+                    onClick={(e) => {
+                      if (isCreatingTicketRef.current) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                      }
+                    }}
+                  >
                     {isCreatingTicket ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -1968,7 +1979,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1" disabled={isEditingTicket}>
+                  <Button 
+                    type="submit" 
+                    className="flex-1" 
+                    disabled={isEditingTicket}
+                    onClick={(e) => {
+                      if (isEditingTicketRef.current) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                      }
+                    }}
+                  >
                     {isEditingTicket ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -2176,7 +2198,18 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   )}
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1" disabled={isUpdatingTicket}>
+                  <Button 
+                    type="submit" 
+                    className="flex-1" 
+                    disabled={isUpdatingTicket}
+                    onClick={(e) => {
+                      if (isUpdatingTicketRef.current) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return false;
+                      }
+                    }}
+                  >
                     {isUpdatingTicket ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
