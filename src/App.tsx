@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   Ticket as TicketIcon,
@@ -726,6 +726,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const [isEditingTicket, setIsEditingTicket] = useState(false);
   const [isResendingNotif, setIsResendingNotif] = useState(false);
 
+  // Refs for synchronous spam prevention
+  const isCreatingTicketRef = useRef(false);
+  const isUpdatingTicketRef = useRef(false);
+  const isEditingTicketRef = useRef(false);
+
   const [newTicket, setNewTicket] = useState({
     type: 'installation' as TicketType,
     customerName: '',
@@ -853,9 +858,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (isCreatingTicket) return; // Prevent spam clicks
-
-    // Set loading state immediately to prevent spam clicks
+    // Check ref synchronously to prevent race conditions
+    if (isCreatingTicketRef.current) return;
+    
+    // Set ref immediately (synchronous)
+    isCreatingTicketRef.current = true;
     setIsCreatingTicket(true);
     
     try {
@@ -896,14 +903,19 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     } catch (err) {
       console.error(err);
     } finally {
+      isCreatingTicketRef.current = false;
       setIsCreatingTicket(false);
     }
   };
 
   const handleUpdateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTicket || isUpdatingTicket) return; // Prevent spam clicks
     
+    // Check ref synchronously to prevent race conditions
+    if (!selectedTicket || isUpdatingTicketRef.current) return;
+    
+    // Set ref immediately (synchronous)
+    isUpdatingTicketRef.current = true;
     setIsUpdatingTicket(true);
     try {
       const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
@@ -955,14 +967,19 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     } catch (err) {
       console.error(err);
     } finally {
+      isUpdatingTicketRef.current = false;
       setIsUpdatingTicket(false);
     }
   };
 
   const handleEditTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTicket || isEditingTicket) return; // Prevent spam clicks
+    
+    // Check ref synchronously to prevent race conditions
+    if (!selectedTicket || isEditingTicketRef.current) return;
 
+    // Set ref immediately (synchronous)
+    isEditingTicketRef.current = true;
     setIsEditingTicket(true);
     try {
       const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
@@ -985,6 +1002,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     } catch (err) {
       console.error(err);
     } finally {
+      isEditingTicketRef.current = false;
       setIsEditingTicket(false);
     }
   };
