@@ -723,6 +723,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const [ticketModalMode, setTicketModalMode] = useState<'action' | 'edit'>('action');
   const [isCreatingTicket, setIsCreatingTicket] = useState(false);
   const [isUpdatingTicket, setIsUpdatingTicket] = useState(false);
+  const [isEditingTicket, setIsEditingTicket] = useState(false);
   const [isResendingNotif, setIsResendingNotif] = useState(false);
 
   const [newTicket, setNewTicket] = useState({
@@ -854,20 +855,22 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     
     if (isCreatingTicket) return; // Prevent spam clicks
 
-    // Duplicate check
-    const isDuplicate = tickets.some(t =>
-      t.status !== 'completed' &&
-      t.customerName.toLowerCase() === newTicket.customerName.toLowerCase()
-    );
-
-    if (isDuplicate) {
-      if (!confirm(`Pelanggan dengan nama "${newTicket.customerName}" sudah memiliki tiket yang masih aktif. Apakah Anda yakin ingin membuat tiket baru?`)) {
-        return;
-      }
-    }
-
+    // Set loading state immediately to prevent spam clicks
     setIsCreatingTicket(true);
+    
     try {
+      // Duplicate check
+      const isDuplicate = tickets.some(t =>
+        t.status !== 'completed' &&
+        t.customerName.toLowerCase() === newTicket.customerName.toLowerCase()
+      );
+
+      if (isDuplicate) {
+        if (!confirm(`Pelanggan dengan nama "${newTicket.customerName}" sudah memiliki tiket yang masih aktif. Apakah Anda yakin ingin membuat tiket baru?`)) {
+          return;
+        }
+      }
+
       const res = await fetch('/api/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -958,8 +961,9 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
 
   const handleEditTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTicket) return;
+    if (!selectedTicket || isEditingTicket) return; // Prevent spam clicks
 
+    setIsEditingTicket(true);
     try {
       const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
         method: 'PATCH',
@@ -980,6 +984,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsEditingTicket(false);
     }
   };
 
@@ -1944,8 +1950,17 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1">Simpan Perubahan</Button>
-                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsEditTicketModalOpen(false)}>Batal</Button>
+                  <Button type="submit" className="flex-1" disabled={isEditingTicket}>
+                    {isEditingTicket ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      'Simpan Perubahan'
+                    )}
+                  </Button>
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsEditTicketModalOpen(false)} disabled={isEditingTicket}>Batal</Button>
                 </div>
               </form>
             </motion.div>
