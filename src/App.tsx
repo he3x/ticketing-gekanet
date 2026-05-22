@@ -721,6 +721,9 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
   const [isMapModeDropdownOpen, setIsMapModeDropdownOpen] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
   const [ticketModalMode, setTicketModalMode] = useState<'action' | 'edit'>('action');
+  const [isCreatingTicket, setIsCreatingTicket] = useState(false);
+  const [isUpdatingTicket, setIsUpdatingTicket] = useState(false);
+  const [isResendingNotif, setIsResendingNotif] = useState(false);
 
   const [newTicket, setNewTicket] = useState({
     type: 'installation' as TicketType,
@@ -848,6 +851,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (isCreatingTicket) return; // Prevent spam clicks
 
     // Duplicate check
     const isDuplicate = tickets.some(t =>
@@ -861,6 +866,7 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       }
     }
 
+    setIsCreatingTicket(true);
     try {
       const res = await fetch('/api/tickets', {
         method: 'POST',
@@ -886,12 +892,16 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsCreatingTicket(false);
     }
   };
 
   const handleUpdateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTicket) return;
+    if (!selectedTicket || isUpdatingTicket) return; // Prevent spam clicks
+    
+    setIsUpdatingTicket(true);
     try {
       const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
         method: 'PATCH',
@@ -941,6 +951,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsUpdatingTicket(false);
     }
   };
 
@@ -1486,7 +1498,10 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                 {user.role !== 'technician' && user.role !== 'vendor' && selectedTicket.status === 'open' && (
                   <Button
                     className="flex-1 bg-green-600 hover:bg-green-700"
+                    disabled={isResendingNotif}
                     onClick={async () => {
+                      if (isResendingNotif) return;
+                      setIsResendingNotif(true);
                       try {
                         const res = await fetch(`/api/tickets/${selectedTicket.id}/resend-notification`, {
                           method: 'POST'
@@ -1500,11 +1515,22 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       } catch (err) {
                         console.error(err);
                         alert('Terjadi kesalahan saat mengirim notifikasi');
+                      } finally {
+                        setIsResendingNotif(false);
                       }
                     }}
                   >
-                    <Phone className="w-4 h-4" />
-                    Resend WhatsApp
+                    {isResendingNotif ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Mengirim...
+                      </>
+                    ) : (
+                      <>
+                        <Phone className="w-4 h-4" />
+                        Resend WhatsApp
+                      </>
+                    )}
                   </Button>
                 )}
                 <Button variant="outline" className="flex-1" onClick={() => setSelectedTicket(null)}>Tutup</Button>
@@ -1754,8 +1780,17 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   </div>
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1">Simpan Tiket</Button>
-                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsModalOpen(false)}>Batal</Button>
+                  <Button type="submit" className="flex-1" disabled={isCreatingTicket}>
+                    {isCreatingTicket ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      'Simpan Tiket'
+                    )}
+                  </Button>
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsModalOpen(false)} disabled={isCreatingTicket}>Batal</Button>
                 </div>
               </form>
             </motion.div>
@@ -2108,8 +2143,17 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                   )}
                 </div>
                 <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                  <Button type="submit" className="flex-1">{ticketModalMode === 'edit' ? 'Simpan Perubahan' : 'Kirim Laporan'}</Button>
-                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsReportModalOpen(false)}>Batal</Button>
+                  <Button type="submit" className="flex-1" disabled={isUpdatingTicket}>
+                    {isUpdatingTicket ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      ticketModalMode === 'edit' ? 'Simpan Perubahan' : 'Kirim Laporan'
+                    )}
+                  </Button>
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsReportModalOpen(false)} disabled={isUpdatingTicket}>Batal</Button>
                 </div>
               </form>
             </motion.div>
@@ -2189,11 +2233,12 @@ function DetailItem({ icon: Icon, label, value }: { icon: any; label: string; va
   );
 }
 
-function MediaPlayer({ url, name }: { url: string; name: string }) {
+function MediaPlayer({ url, name }: { url: string; name?: string }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
-  const isVideo = /\.(mp4|webm|ogg)$/i.test(name);
-  const isAudio = /\.(mp3|wav|ogg)$/i.test(name);
+  const fileName = name || 'Unknown';
+  const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(fileName);
+  const isVideo = /\.(mp4|webm|ogg)$/i.test(fileName);
+  const isAudio = /\.(mp3|wav|ogg)$/i.test(fileName);
 
   const toggleFullscreen = () => {
     if (isImage || isVideo) {
@@ -2419,7 +2464,7 @@ function ReportsView({ tickets, users }: { tickets: Ticket[]; users: User[] }) {
         'Status': t.status,
         'Teknisi Utama': tech?.name || '-',
         'Tim Teknisi': assignedTechs || '-',
-        'Waktu Tangani': t.completedAt ? format(completedAt, 'yyyy-MM-dd HH:mm:ss') : '-',
+        'Waktu Tangani': completedAt ? format(completedAt, 'yyyy-MM-dd HH:mm:ss') : '-',
         'Solusi/Tindakan': t.report || '-',
         'Catatan Teknisi': t.technicianNotes || '-',
         'Lampiran Teknisi': t.reportAttachmentUrl ? `${window.location.origin}${t.reportAttachmentUrl}` : '-',
