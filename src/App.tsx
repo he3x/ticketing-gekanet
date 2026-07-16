@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   LayoutDashboard,
   Ticket as TicketIcon,
@@ -2999,282 +2999,527 @@ function UsersView({ users, onRefresh }: { users: User[]; onRefresh: () => void 
   );
 }
 
-function SettingsView({ settings, onRefresh, onSettingsSaved, user }: { settings: AppSettings | null; onRefresh: () => void; onSettingsSaved: (next: AppSettings | null) => void; user: User }) {
-  const [token, setToken] = useState(settings?.fonnteToken || '');
-  const [group, setGroup] = useState(settings?.whatsappGroup || '');
-  const [templateInstallation, setTemplateInstallation] = useState(settings?.templateInstallation || '');
-  const [templateMaintenance, setTemplateMaintenance] = useState(settings?.templateMaintenance || '');
-  const [templateClosed, setTemplateClosed] = useState(settings?.templateClosed || '');
-  const [mediaRetentionDays, setMediaRetentionDays] = useState(settings?.mediaRetentionDays || 60);
-  const [activeTab, setActiveTab] = useState<'installation' | 'maintenance' | 'closed'>('installation');
+function SettingsView({ settings, onRefresh, onSettingsSaved, user }: {
+  settings: AppSettings | null;
+  onRefresh: () => void;
+  onSettingsSaved: (settings: AppSettings) => void;
+  user: User;
+}) {
+  // ── WA Monitoring State ─────────────────────────────────────────────────────
+  type WAStatus = 'INITIALIZING' | 'QR_READY' | 'CONNECTED' | 'DISCONNECTED';
+  const [waStatus, setWaStatus] = useState<WAStatus>('INITIALIZING');
+  const [waInfo, setWaInfo] = useState<{ pushname?: string; wid?: string }>({});
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [waActionLoading, setWaActionLoading] = useState(false);
+  const [waActionMsg, setWaActionMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const qrIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [waGroups, setWaGroups] = useState<{ id: string; name: string; participants: number }[]>([]);
+  const [waGroupsLoading, setWaGroupsLoading] = useState(false);
+  const [waGroupsError, setWaGroupsError] = useState<string | null>(null);
+  const [showGroupsList, setShowGroupsList] = useState(false);
+
+  // Fetch groups the WA account is in
+  const fetchWaGroups = async () => {
+    setWaGroupsLoading(true);
+    setWaGroupsError(null);
+    try {
+      const res = await fetch('/api/whatsapp/groups');
+      if (!res.ok) {
+        const d = await res.json();
+        setWaGroupsError(d.error || 'Gagal mengambil daftar grup');
+      } else {
+        const d = await res.json();
+        setWaGroups(d.groups || []);
+        setShowGroupsList(true);
+      }
+    } catch {
+      setWaGroupsError('Network error saat mengambil daftar grup');
+    } finally {
+      setWaGroupsLoading(false);
+    }
+  };
+
+  // Stop QR polling interval
+  const stopQrPolling = () => {
+    if (qrIntervalRef.current !== null) {
+      clearInterval(qrIntervalRef.current);
+      qrIntervalRef.current = null;
+    }
+  };
+
+  // Fetch status only (no QR) — untuk refresh manual
+  const fetchWaStatus = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      setWaStatus(data.status);
+      setWaInfo(data.info || {});
+    } catch { /* ignore */ }
+  };
+
+  // Fetch status + QR — digunakan di dalam polling loop QR modal
+  const fetchQrLoop = async () => {
+    try {
+      const statusRes = await fetch('/api/whatsapp/status');
+      if (!statusRes.ok) return;
+      const sd = await statusRes.json();
+      setWaStatus(sd.status);
+      setWaInfo(sd.info || {});
+      if (sd.status === 'CONNECTED') {
+        // Scan berhasil — tutup modal & hentikan polling
+        stopQrPolling();
+        setShowQrModal(false);
+        setQrDataUrl(null);
+      } else if (sd.status === 'QR_READY') {
+        const qrRes = await fetch('/api/whatsapp/qr');
+        if (qrRes.ok) {
+          const qrData = await qrRes.json();
+          setQrDataUrl(qrData.qr);
+        }
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Buka QR modal + mulai short-lived polling (hanya saat modal terbuka)
+  const handleShowQr = async () => {
+    setShowQrModal(true);
+    setQrDataUrl(null);
+    stopQrPolling();
+    await fetchQrLoop();
+    qrIntervalRef.current = setInterval(fetchQrLoop, 3000);
+  };
+
+  // Tutup QR modal + hentikan polling
+  const handleCloseQrModal = () => {
+    stopQrPolling();
+    setShowQrModal(false);
+    setQrDataUrl(null);
+  };
+
+  // Refresh status manual
+  const handleRefreshStatus = async () => {
+    setIsRefreshing(true);
+    await fetchWaStatus();
+    setIsRefreshing(false);
+  };
+
+  // Ambil status sekali saat mount — TIDAK ada continuous polling
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    fetchWaStatus();
+    return () => stopQrPolling();
+  }, []);
+
+  const handleWaLogout = async () => {
+    if (!confirm('Yakin ingin logout dari WhatsApp?')) return;
+    setWaActionLoading(true);
+    try {
+      const res = await fetch('/api/whatsapp/logout', { method: 'POST' });
+      const d = await res.json();
+      if (res.ok) {
+        setWaActionMsg({ type: 'success', text: 'Berhasil logout dari WhatsApp' });
+        setWaStatus('INITIALIZING');
+        setQrDataUrl(null);
+      } else {
+        setWaActionMsg({ type: 'error', text: d.error || 'Gagal logout' });
+      }
+    } catch { setWaActionMsg({ type: 'error', text: 'Tidak dapat terhubung ke server' }); }
+    finally { setWaActionLoading(false); }
+  };
+
+  const handleWaRestart = async () => {
+    if (!confirm('Restart koneksi WhatsApp?')) return;
+    setWaActionLoading(true);
+    try {
+      const res = await fetch('/api/whatsapp/restart', { method: 'POST' });
+      const d = await res.json();
+      if (res.ok) {
+        setWaActionMsg({ type: 'success', text: 'WhatsApp client sedang restart...' });
+        setWaStatus('INITIALIZING');
+        setQrDataUrl(null);
+      } else {
+        setWaActionMsg({ type: 'error', text: d.error || 'Gagal restart' });
+      }
+    } catch { setWaActionMsg({ type: 'error', text: 'Tidak dapat terhubung ke server' }); }
+    finally { setWaActionLoading(false); }
+  };
+
+  const waStatusConfig: Record<WAStatus, { label: string; dotColor: string; bgColor: string; textColor: string }> = {
+    INITIALIZING: { label: 'Menginisialisasi...', dotColor: 'bg-yellow-400 animate-pulse', bgColor: 'bg-yellow-50 border-yellow-200', textColor: 'text-yellow-700' },
+    QR_READY: { label: 'Menunggu Scan QR', dotColor: 'bg-blue-400 animate-pulse', bgColor: 'bg-blue-50 border-blue-200', textColor: 'text-blue-700' },
+    CONNECTED: { label: 'Terhubung', dotColor: 'bg-green-400', bgColor: 'bg-green-50 border-green-200', textColor: 'text-green-700' },
+    DISCONNECTED: { label: 'Terputus', dotColor: 'bg-red-400', bgColor: 'bg-red-50 border-red-200', textColor: 'text-red-700' },
+  };
+  const waCfg = waStatusConfig[waStatus];
+
+  // ── Settings Form State ─────────────────────────────────────────────────────
+  const [form, setForm] = useState({
+    whatsappGroup: settings?.whatsappGroup || '',
+    templateInstallation: settings?.templateInstallation || '',
+    templateMaintenance: settings?.templateMaintenance || '',
+    templateDismantle: settings?.templateDismantle || '',
+    templateClosed: settings?.templateClosed || '',
+    mediaRetentionDays: settings?.mediaRetentionDays || 60,
+  });
   const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState('');
 
   useEffect(() => {
-    if (!settings) return;
-    setToken(settings.fonnteToken || '');
-    setGroup(settings.whatsappGroup || '');
-    setTemplateInstallation(settings.templateInstallation || '');
-    setTemplateMaintenance(settings.templateMaintenance || '');
-    setTemplateClosed(settings.templateClosed || '');
-    setMediaRetentionDays(settings.mediaRetentionDays || 60);
+    if (settings) {
+      setForm({
+        whatsappGroup: settings.whatsappGroup || '',
+        templateInstallation: settings.templateInstallation || '',
+        templateMaintenance: settings.templateMaintenance || '',
+        templateDismantle: settings.templateDismantle || '',
+        templateClosed: settings.templateClosed || '',
+        mediaRetentionDays: settings.mediaRetentionDays || 60,
+      });
+    }
   }, [settings]);
 
-  const handleSave = async () => {
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
     setSaving(true);
+    setSaveMsg('');
     try {
-      const payload = {
-        fonnteToken: token.trim(),
-        whatsappGroup: group.trim(),
-        templateInstallation,
-        templateMaintenance,
-        templateClosed,
-        mediaRetentionDays
-      };
-
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(form)
       });
-
-      const contentType = res.headers.get('content-type') || '';
-      const savedSettings = contentType.includes('application/json') ? await res.json() : null;
-
-      if (!res.ok) {
-        throw new Error(savedSettings?.message || 'Gagal menyimpan pengaturan');
+      if (res.ok) {
+        const updated = await res.json();
+        onSettingsSaved(updated);
+        setSaveMsg('Pengaturan berhasil disimpan!');
+        setTimeout(() => setSaveMsg(''), 3000);
+      } else {
+        setSaveMsg('Gagal menyimpan pengaturan');
       }
-
-      if (savedSettings) {
-        onSettingsSaved(savedSettings);
-        setToken(savedSettings.fonnteToken || '');
-        setGroup(savedSettings.whatsappGroup || '');
-        setTemplateInstallation(savedSettings.templateInstallation || '');
-        setTemplateMaintenance(savedSettings.templateMaintenance || '');
-        setTemplateClosed(savedSettings.templateClosed || '');
-        setMediaRetentionDays(savedSettings.mediaRetentionDays || 60);
-      }
-
-      await onRefresh();
-      alert('Pengaturan berhasil disimpan');
-    } catch (err) {
-      console.error(err);
-      alert(err instanceof Error ? err.message : 'Gagal menyimpan pengaturan');
+    } catch {
+      setSaveMsg('Error koneksi server');
     } finally {
       setSaving(false);
     }
   };
 
-  const parameters = [
-    { key: '{type}', label: 'Tipe Tiket' },
-    { key: '{id}', label: 'ID Tiket' },
-    { key: '{customerName}', label: 'Nama Pelanggan' },
-    { key: '{address}', label: 'Alamat' },
-    { key: '{detail}', label: 'Kendala/Paket' },
-    { key: '{location}', label: 'Link Lokasi' },
-    { key: '{report}', label: 'Laporan Penanganan' },
-    { key: '{notes}', label: 'Catatan Teknisi' },
-    { key: '{phone}', label: 'Telepon Pelanggan' },
-    { key: '{technician}', label: 'Nama Pelaksana' },
-    { key: '{media}', label: 'Link Media/Drive' },
-    { key: '{link}', label: 'Link Tiket' },
-  ];
-
-  const insertParameter = (param: string) => {
-    if (activeTab === 'installation') {
-      setTemplateInstallation(prev => prev + param);
-    } else if (activeTab === 'maintenance') {
-      setTemplateMaintenance(prev => prev + param);
-    } else {
-      setTemplateClosed(prev => prev + param);
-    }
-  };
-
-  const formatPreview = (template: string) => {
-    return template
-      .replace(/{type}/g, activeTab === 'installation' ? 'Pemasangan Baru' : 'Maintenance')
-      .replace(/{id}/g, 'TKT-12345')
-      .replace(/{customerName}/g, 'Ibu Erka')
-      .replace(/{address}/g, 'Jl. Merdeka No. 123')
-      .replace(/{detail}/g, activeTab === 'installation' ? 'Paket 50 Mbps' : 'Internet Lambat')
-      .replace(/{location}/g, '\nLokasi: https://maps.google.com/...')
-      .replace(/{report}/g, 'Sudah dilakukan reset ONT')
-      .replace(/{notes}/g, 'Kabel patchcord agak kendor')
-      .replace(/{phone}/g, '628123456789')
-      .replace(/{technician}/g, 'Budi Technician / Vendor Lapangan')
-      .replace(/{media}/g, 'https://drive.google.com/file/d/123456789/view')
-      .replace(/{link}/g, '\nLink Tiket: https://app.url/?ticketId=TKT-12345');
-  };
-
-  const currentTemplate = activeTab === 'installation'
-    ? templateInstallation
-    : activeTab === 'maintenance'
-      ? templateMaintenance
-      : templateClosed;
-
-  const setTemplate = (val: string) => {
-    if (activeTab === 'installation') setTemplateInstallation(val);
-    else if (activeTab === 'maintenance') setTemplateMaintenance(val);
-    else setTemplateClosed(val);
-  };
-
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="max-w-6xl mx-auto"
-    >
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-7 space-y-6">
-          <Card className="p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
-              <Settings className="w-5 h-5 text-blue-600" />
-              Konfigurasi API & Group
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fonnte API Token</label>
-                <Input
-                  type="password"
-                  value={token}
-                  onChange={e => setToken(e.target.value)}
-                  placeholder="Masukkan token Fonnte Anda"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">WhatsApp Group ID</label>
-                <Input
-                  value={group}
-                  onChange={e => setGroup(e.target.value)}
-                  placeholder="Masukkan ID Group WhatsApp"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Masa Simpan Media (Hari)</label>
-                <Input
-                  type="number"
-                  value={mediaRetentionDays}
-                  onChange={e => setMediaRetentionDays(parseInt(e.target.value) || 0)}
-                  placeholder="60"
-                />
-                <p className="text-[10px] text-gray-500 mt-1">Media yang lebih lama dari jumlah hari ini akan dihapus otomatis oleh sistem.</p>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-              <h3 className="text-lg font-bold text-gray-900">Template Pesan</h3>
-              <div className="flex bg-gray-100 p-1 rounded-lg overflow-x-auto">
-                <button
-                  onClick={() => setActiveTab('installation')}
-                  className={cn(
-                    "px-3 py-1.5 text-[10px] font-bold rounded-md transition-all whitespace-nowrap",
-                    activeTab === 'installation' ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                  )}
-                >
-                  Pemasangan
-                </button>
-                <button
-                  onClick={() => setActiveTab('maintenance')}
-                  className={cn(
-                    "px-3 py-1.5 text-[10px] font-bold rounded-md transition-all whitespace-nowrap",
-                    activeTab === 'maintenance' ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                  )}
-                >
-                  Maintenance
-                </button>
-                <button
-                  onClick={() => setActiveTab('closed')}
-                  className={cn(
-                    "px-3 py-1.5 text-[10px] font-bold rounded-md transition-all whitespace-nowrap",
-                    activeTab === 'closed' ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                  )}
-                >
-                  Tiket Selesai
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {activeTab === 'installation' ? 'Pesan Pemasangan Baru' : activeTab === 'maintenance' ? 'Pesan Maintenance Baru' : 'Pesan Tiket Selesai'}
-                </label>
-                <textarea
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all min-h-[200px] text-sm font-mono leading-relaxed"
-                  value={currentTemplate}
-                  onChange={e => setTemplate(e.target.value)}
-                  placeholder="Ketik template pesan di sini..."
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <Button type="button" onClick={handleSave} disabled={saving} className="px-8">
-                  {saving ? 'Menyimpan...' : 'Simpan Pengaturan'}
-                </Button>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-5 space-y-6">
-          <Card className="p-6">
-            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Parameter Tersedia</h3>
-            <p className="text-xs text-gray-500 mb-4">Klik parameter untuk memasukkan ke dalam editor</p>
-            <div className="flex flex-wrap gap-2">
-              {parameters.map(param => (
-                <button
-                  key={param.key}
-                  onClick={() => insertParameter(param.key)}
-                  className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors"
-                >
-                  {param.key}
-                </button>
-              ))}
-            </div>
-          </Card>
-
-          <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Preview WhatsApp</h3>
-            <div className="bg-[#E5DDD5] rounded-2xl overflow-hidden shadow-lg border border-gray-200">
-              <div className="bg-[#075E54] p-4 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white">
-                  <UserIcon className="w-6 h-6" />
-                </div>
-                <div>
-                  <h4 className="text-white font-bold text-sm">GekaNet Bot</h4>
-                  <p className="text-white/70 text-[10px]">online</p>
-                </div>
-              </div>
-              <div className="p-4 space-y-4 min-h-[300px] bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat">
-                <div className="max-w-[85%] bg-white p-3 rounded-lg rounded-tl-none shadow-sm relative">
-                  <div className="absolute top-0 -left-2 w-0 h-0 border-t-[10px] border-t-white border-l-[10px] border-l-transparent" />
-                  <pre className="text-xs text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">
-                    {formatPreview(currentTemplate)}
-                  </pre>
-                  <div className="text-[9px] text-gray-400 text-right mt-1">
-                    {format(new Date(), 'HH:mm')}
-                  </div>
-                </div>
-              </div>
-            </div>
+    <div className="space-y-6 max-w-3xl">
+      {/* ── WhatsApp Monitoring Card ────────────────────────────────────────── */}
+      <Card className="overflow-visible">
+        <div className="p-6 border-b border-gray-100 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center text-white flex-shrink-0">
+            <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Monitoring Koneksi WhatsApp</h2>
+            <p className="text-sm text-gray-500">Status koneksi WhatsApp menggunakan whatsapp-web.js</p>
           </div>
         </div>
-      </div>
+        <div className="p-6 space-y-4">
+          {/* Status Badge */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">Status Koneksi</span>
+            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-sm font-medium ${waCfg.bgColor} ${waCfg.textColor}`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${waCfg.dotColor}`} />
+              {waCfg.label}
+            </span>
+          </div>
 
-      <Card className="mt-8 p-6 bg-blue-50 border-blue-100">
-        <h4 className="font-bold text-blue-900 mb-2 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" />
-          Informasi API
-        </h4>
-        <p className="text-sm text-blue-700 leading-relaxed">
-          Sistem ini menggunakan API dari <strong>Fonnte</strong> untuk integrasi WhatsApp.
-          Pastikan nomor pengirim sudah aktif di dashboard Fonnte agar notifikasi dapat terkirim dengan lancar.
-          Gunakan variabel yang tersedia untuk mempersonalisasi pesan Anda.
-        </p>
+          {/* Connected Account Info */}
+          {waStatus === 'CONNECTED' && waInfo.pushname && (
+            <div className="flex items-center gap-3 p-4 bg-green-50 rounded-xl border border-green-200">
+              <div className="w-10 h-10 rounded-full bg-green-200 flex items-center justify-center text-green-700 font-bold text-lg flex-shrink-0">
+                {waInfo.pushname.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <p className="font-semibold text-green-900">{waInfo.pushname}</p>
+                {waInfo.wid && <p className="text-sm text-green-700">+{waInfo.wid}</p>}
+              </div>
+            </div>
+          )}
+
+          {/* QR_READY info — QR ditampilkan di modal, bukan inline */}
+          {waStatus === 'QR_READY' && (
+            <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-xl border border-blue-200">
+              <Loader2 className="w-5 h-5 text-blue-500 animate-spin flex-shrink-0" />
+              <span className="text-sm text-blue-700">QR Code siap. Klik <strong>Tampilkan QR</strong> untuk login WhatsApp.</span>
+            </div>
+          )}
+
+          {/* Initializing */}
+          {waStatus === 'INITIALIZING' && (
+            <div className="flex items-center gap-3 p-4 bg-yellow-50 rounded-xl border border-yellow-200">
+              <Loader2 className="w-5 h-5 text-yellow-500 animate-spin flex-shrink-0" />
+              <span className="text-sm text-yellow-700">WhatsApp sedang menginisialisasi, harap tunggu...</span>
+            </div>
+          )}
+
+          {/* Disconnected */}
+          {waStatus === 'DISCONNECTED' && (
+            <div className="flex items-center gap-3 p-4 bg-red-50 rounded-xl border border-red-200">
+              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-red-700">WhatsApp Terputus</p>
+                <p className="text-xs text-red-500 mt-0.5">Klik Restart untuk mencoba menghubungkan kembali</p>
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={handleRefreshStatus} disabled={isRefreshing} className="flex items-center gap-2 text-sm">
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              Refresh Status
+            </Button>
+            {waStatus !== 'CONNECTED' && (
+              <Button variant="secondary" onClick={handleShowQr} disabled={waActionLoading} className="flex items-center gap-2 text-sm">
+                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+                  <path d="M14 14h.01M14 17h.01M17 14h.01M20 14h.01M20 17h.01M17 20h.01M20 20h.01" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Tampilkan QR Code
+              </Button>
+            )}
+            <Button variant="outline" onClick={handleWaRestart} disabled={waActionLoading} className="flex items-center gap-2 text-sm">
+              <RefreshCw className={`w-4 h-4 ${waActionLoading ? 'animate-spin' : ''}`} />
+              Restart WA
+            </Button>
+            {waStatus === 'CONNECTED' && (
+              <Button variant="danger" onClick={handleWaLogout} disabled={waActionLoading} className="flex items-center gap-2 text-sm">
+                <LogOut className="w-4 h-4" />
+                Logout WA
+              </Button>
+            )}
+          </div>
+
+          {/* Action Message */}
+          {waActionMsg && (
+            <div className={`flex items-center gap-2 p-3 rounded-lg text-sm border ${waActionMsg.type === 'success' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+              {waActionMsg.type === 'success' ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+              {waActionMsg.text}
+              <button onClick={() => setWaActionMsg(null)} className="ml-auto opacity-60 hover:opacity-100">×</button>
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400">Gunakan tombol <strong>Refresh Status</strong> untuk memperbarui status koneksi secara manual.</p>
+        </div>
       </Card>
-    </motion.div>
+
+      {/* ── QR Code Modal ─────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showQrModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={handleCloseQrModal}
+              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative bg-white rounded-2xl shadow-2xl overflow-hidden max-w-xs w-full"
+            >
+              <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white">
+                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                    </svg>
+                  </div>
+                  <h3 className="font-bold text-gray-900">Login WhatsApp</h3>
+                </div>
+                <button onClick={handleCloseQrModal} className="p-1.5 hover:bg-gray-100 rounded-full transition-colors">
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              </div>
+              <div className="p-6 flex flex-col items-center gap-4">
+                <div className="text-center">
+                  <p className="text-sm font-semibold text-gray-800">Scan QR Code untuk Login</p>
+                  <p className="text-xs text-gray-500 mt-1">Buka WhatsApp → Menu → Perangkat Tertaut → Tautkan Perangkat</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 flex items-center justify-center min-h-[220px] w-full">
+                  {qrDataUrl ? (
+                    <img src={qrDataUrl} alt="WA QR Code" className="w-52 h-52 object-contain" />
+                  ) : waStatus === 'CONNECTED' ? (
+                    <div className="flex flex-col items-center gap-2 text-green-600">
+                      <CheckCircle className="w-12 h-12" />
+                      <p className="text-sm font-semibold">Terhubung!</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 text-gray-400">
+                      <Loader2 className="w-10 h-10 animate-spin" />
+                      <p className="text-xs">Memuat QR Code...</p>
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 text-center">
+                  {waStatus === 'QR_READY' ? 'QR diperbarui otomatis setiap 3 detik' : waStatus === 'CONNECTED' ? 'Berhasil terhubung!' : 'Menunggu QR Code dari server...'}
+                </p>
+              </div>
+              <div className="px-6 pb-5">
+                <Button variant="outline" onClick={handleCloseQrModal} className="w-full text-sm">
+                  Tutup
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── WhatsApp Settings Form ──────────────────────────────────────────── */}
+      {user.role === 'superuser' && (
+        <Card>
+          <div className="p-6 border-b border-gray-100">
+            <h2 className="text-lg font-bold text-gray-900">Pengaturan Notifikasi WhatsApp</h2>
+            <p className="text-sm text-gray-500 mt-1">Konfigurasi grup dan template pesan WhatsApp</p>
+          </div>
+          <form onSubmit={handleSave} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ID Grup WhatsApp</label>
+              <Input
+                value={form.whatsappGroup}
+                onChange={e => setForm({ ...form, whatsappGroup: e.target.value })}
+                placeholder="Contoh: 628xx...@g.us atau 628xx..."
+              />
+              <p className="text-xs text-gray-400 mt-1">ID grup untuk menerima notifikasi tiket baru</p>
+              <div className="mt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="text-xs py-1 px-3"
+                  onClick={fetchWaGroups}
+                  disabled={waStatus !== 'CONNECTED' || waGroupsLoading}
+                >
+                  {waGroupsLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Memuat...</> : '🔍 Lihat Daftar Grup WA'}
+                </Button>
+                {waStatus !== 'CONNECTED' && (
+                  <span className="ml-2 text-xs text-amber-500">WhatsApp harus CONNECTED untuk melihat daftar grup</span>
+                )}
+              </div>
+              {waGroupsError && (
+                <p className="text-xs text-red-500 mt-1">{waGroupsError}</p>
+              )}
+              {showGroupsList && waGroups.length > 0 && (
+                <div className="mt-2 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+                    <span className="text-xs font-medium text-gray-600">{waGroups.length} grup ditemukan — klik untuk menggunakan</span>
+                    <button type="button" onClick={() => setShowGroupsList(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3 h-3" /></button>
+                  </div>
+                  {waGroups.map(g => (
+                    <div
+                      key={g.id}
+                      className="flex items-center justify-between px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0"
+                      onClick={() => { setForm(f => ({ ...f, whatsappGroup: g.id })); setShowGroupsList(false); }}
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{g.name}</p>
+                        <p className="text-xs text-gray-400 font-mono">{g.id}</p>
+                      </div>
+                      <span className="text-xs text-gray-400">{g.participants} anggota</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showGroupsList && waGroups.length === 0 && !waGroupsLoading && (
+                <p className="text-xs text-gray-500 mt-1">Tidak ada grup yang ditemukan pada akun WA ini.</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Template Pemasangan Baru</label>
+              <Textarea
+                value={form.templateInstallation}
+                onChange={e => setForm({ ...form, templateInstallation: e.target.value })}
+                rows={3}
+                placeholder="Template pesan untuk tiket pemasangan..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Template Maintenance</label>
+              <Textarea
+                value={form.templateMaintenance}
+                onChange={e => setForm({ ...form, templateMaintenance: e.target.value })}
+                rows={3}
+                placeholder="Template pesan untuk tiket maintenance..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Template Dismantle</label>
+              <Textarea
+                value={form.templateDismantle}
+                onChange={e => setForm({ ...form, templateDismantle: e.target.value })}
+                rows={3}
+                placeholder="Template pesan untuk tiket dismantle..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Template Tiket Selesai</label>
+              <Textarea
+                value={form.templateClosed}
+                onChange={e => setForm({ ...form, templateClosed: e.target.value })}
+                rows={3}
+                placeholder="Template pesan ketika tiket diselesaikan..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Retensi Media (hari)</label>
+              <Input
+                type="number"
+                value={form.mediaRetentionDays}
+                onChange={e => setForm({ ...form, mediaRetentionDays: parseInt(e.target.value) || 60 })}
+                min={1}
+                max={365}
+              />
+            </div>
+
+            <div className="pt-2 flex items-center gap-4">
+              <Button type="submit" disabled={saving}>
+                {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Menyimpan...</> : 'Simpan Pengaturan'}
+              </Button>
+              {saveMsg && <span className={`text-sm ${saveMsg.includes('berhasil') ? 'text-green-600' : 'text-red-600'}`}>{saveMsg}</span>}
+            </div>
+
+            <div className="text-xs text-gray-400 space-y-1 pt-2 border-t border-gray-100">
+              <p className="font-medium text-gray-500">Variabel template yang tersedia:</p>
+              <p>
+                <code className="bg-gray-100 px-1 rounded">{'{id}'}</code> ID Tiket &nbsp;
+                <code className="bg-gray-100 px-1 rounded">{'{customerName}'}</code> Nama Pelanggan &nbsp;
+                <code className="bg-gray-100 px-1 rounded">{'{address}'}</code> Alamat
+              </p>
+              <p>
+                <code className="bg-gray-100 px-1 rounded">{'{detail}'}</code> Detail (Paket/Kendala/Alasan) &nbsp;
+                <code className="bg-blue-50 text-blue-700 px-1 rounded border border-blue-200">{'{technician}'}</code> Teknisi yang mengerjakan &nbsp;
+                <code className="bg-blue-50 text-blue-700 px-1 rounded border border-blue-200">{'{location}'}</code> Link Lokasi Google Maps
+              </p>
+              <p>
+                <code className="bg-gray-100 px-1 rounded">{'{report}'}</code> Laporan Teknisi &nbsp;
+                <code className="bg-gray-100 px-1 rounded">{'{notes}'}</code> Catatan Teknisi &nbsp;
+                <code className="bg-gray-100 px-1 rounded">{'{link}'}</code> Link Tiket
+              </p>
+              <p className="text-amber-500 flex items-center gap-1 pt-1">
+                <span>⚠</span>
+                <span>
+                  <code className="bg-amber-50 border border-amber-200 px-1 rounded">{'{technician}'}</code> dan{' '}
+                  <code className="bg-amber-50 border border-amber-200 px-1 rounded">{'{location}'}</code> otomatis kosong jika data belum diisi pada tiket.
+                </span>
+              </p>
+            </div>
+          </form>
+        </Card>
+      )}
+    </div>
   );
 }
 

@@ -36,7 +36,6 @@ export interface Ticket {
 }
 
 export interface AppSettings {
-  fonnteToken: string;
   whatsappGroup?: string;
   templateInstallation?: string;
   templateMaintenance?: string;

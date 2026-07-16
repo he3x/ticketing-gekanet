@@ -2,10 +2,10 @@ node_modules/
 build/
 dist/
 coverage/
-uploads
+uploads/
 db.json
+.wwebjs_auth/
 .DS_Store
 *.log
 .env*
 !.env.example
-db.json

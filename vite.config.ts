@@ -17,8 +17,17 @@ export default defineConfig(({mode}) => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      watch: {
+        // Ignore whatsapp-web.js session & auth folders so Vite HMR
+        // does NOT trigger a page reload when WA writes session cookies.
+        ignored: [
+          '**/.wwebjs_auth/**',
+          '**/.wwebjs_cache/**',
+          '**/uploads/**',
+          '**/data/**',
+        ],
+      },
     },
   };
 });
