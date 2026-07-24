@@ -9,3 +9,7 @@ db.json
 *.log
 .env*
 !.env.example
+
+# SQL migration artifacts – ignore local DB dumps but keep schema.sql
+*.sql.bak
+db-dump-*.sql

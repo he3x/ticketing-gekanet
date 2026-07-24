@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
+// @ts-ignore — Vite handles CSS imports; no TypeScript declaration needed
 import 'leaflet/dist/leaflet.css';
 
 // Fix Leaflet default icon issue
@@ -49,6 +50,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, differenceInMinutes, subMonths } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { cn } from './lib/utils';
+import api from './lib/api';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { User, Ticket, TicketType, TicketStatus, UserRole, AppSettings } from './types';
 
 // --- Components ---
@@ -103,12 +106,28 @@ const Badge = ({ children, variant = 'default', className }: { children: React.R
 
 // --- Main App ---
 
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+/**
+ * AppShell wraps the real app logic and consumes the AuthContext.
+ * The outer `App` export simply wraps everything in <AuthProvider>.
+ */
+function AppShell() {
+  const { user: authUser, login, logout, isLoading: authLoading } = useAuth();
+
+  // Map AuthUser → legacy User shape so existing sub-views keep working
+  const user: User | null = authUser
+    ? {
+        id:       authUser.userId,
+        username: authUser.username,
+        role:     authUser.role as UserRole,
+        name:     authUser.name,
+        phone:    authUser.phone ?? undefined,
+      }
+    : null;
+
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -126,58 +145,51 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  // Fetch app data whenever the authenticated user changes
   useEffect(() => {
-    const savedUser = localStorage.getItem('wifi_user');
-    let currentUser = null;
-    if (savedUser) {
-      currentUser = JSON.parse(savedUser);
-      setUser(currentUser);
+    if (user) {
+      fetchData();
+    } else {
+      setTickets([]);
+      setUsers([]);
+      setSettings(null);
     }
-    if (currentUser) {
-      fetchData(currentUser);
-    }
-
     // Check for ticketId in URL
     const params = new URLSearchParams(window.location.search);
     if (params.has('ticketId')) {
       setActiveTab('tickets');
     }
-  }, []);
+  }, [authUser]);
 
-  const fetchData = async (currentUser?: User | null) => {
-    const activeUser = currentUser || user;
-    if (!activeUser) return;
-
+  const fetchData = async () => {
+    if (!user) return;
+    setLoading(true);
     try {
-      const ticketUrl = `/api/tickets?userId=${activeUser.id}&role=${activeUser.role}`;
-      const endpoints = [ticketUrl];
+      // Tickets — the v1 route filters by role server-side via JWT
+      const [ticketsRes] = await Promise.all([
+        api.get<{ status: string; data: Ticket[] }>('/tickets'),
+      ]);
+      setTickets(ticketsRes.data.data ?? ticketsRes.data as unknown as Ticket[]);
 
-      // Only superuser can fetch full user list and settings
-      if (activeUser?.role === 'superuser') {
-        endpoints.push('/api/users');
-        endpoints.push('/api/settings');
+      if (user.role === 'superuser' || user.role === 'admin' || user.role === 'supervisor') {
+        const [usersRes, settingsRes] = await Promise.all([
+          api.get<{ status: string; data: User[] }>('/users'),
+          api.get<{ status: string; data: AppSettings }>('/settings'),
+        ]);
+        setUsers(usersRes.data.data ?? usersRes.data as unknown as User[]);
+        const smap = (settingsRes.data.data as any)?.map ?? {};
+        setSettings({
+          whatsappGroup: smap.whatsapp_group ?? '',
+          templateInstallation: smap.template_installation ?? '',
+          templateMaintenance: smap.template_maintenance ?? '',
+          templateDismantle: smap.template_dismantle ?? '',
+          templateClosed: smap.template_closed ?? '',
+          mediaRetentionDays: Number(smap.media_retention_days ?? 60),
+        });
       } else {
-        // Others only get the basic technician list for name resolution
-        endpoints.push('/api/technicians');
-      }
-
-      const responses = await Promise.all(endpoints.map(url => fetch(url, { cache: 'no-store' })));
-
-      const checkRes = async (res: Response) => {
-        const contentType = res.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) {
-          return [];
-        }
-        return res.json();
-      };
-
-      const data = await Promise.all(responses.map(res => checkRes(res)));
-
-      setTickets(data[0]);
-      setUsers(data[1]);
-      if (activeUser?.role === 'superuser') {
-        setSettings(data[2]);
-      } else {
+        // Technicians / vendors only need the worker list for name resolution
+        const techRes = await api.get<{ status: string; data: User[] }>('/users/technicians');
+        setUsers(techRes.data.data ?? techRes.data as unknown as User[]);
         setSettings(null);
       }
     } catch (err) {
@@ -190,42 +202,14 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
-    try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loginForm)
-      });
-
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        console.error(`Expected JSON but got ${contentType}: ${text.slice(0, 100)}...`);
-        setLoginError('Server error: Invalid response format');
-        return;
-      }
-
-      if (res.ok) {
-        const userData = await res.json();
-        setUser(userData);
-        localStorage.setItem('wifi_user', JSON.stringify(userData));
-        fetchData(userData);
-      } else {
-        const errorData = await res.json();
-        setLoginError(errorData.message || 'Username atau password salah');
-      }
-    } catch (err) {
-      setLoginError('Terjadi kesalahan koneksi');
-      console.error('Login error:', err);
+    const result = await login(loginForm);
+    if (!result.success) {
+      setLoginError(result.message ?? 'Username atau password salah');
     }
   };
 
   const handleLogout = () => {
-    setUser(null);
-    setTickets([]);
-    setUsers([]);
-    setSettings(null);
-    localStorage.removeItem('wifi_user');
+    logout();
   };
 
   if (!user) {
@@ -878,28 +862,22 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
         }
       }
 
-      const res = await fetch('/api/tickets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newTicket)
+      await api.post('/tickets', newTicket);
+      setIsModalOpen(false);
+      onRefresh();
+      setNewTicket({
+        type: 'installation',
+        customerName: '',
+        address: '',
+        locationUrl: '',
+        phone: '',
+        issue: '',
+        package: '',
+        notes: '',
+        attachmentUrl: '',
+        attachmentName: '',
+        assignedTechnicianIds: [],
       });
-      if (res.ok) {
-        setIsModalOpen(false);
-        onRefresh();
-        setNewTicket({
-          type: 'installation',
-          customerName: '',
-          address: '',
-          locationUrl: '',
-          phone: '',
-          issue: '',
-          package: '',
-          notes: '',
-          attachmentUrl: '',
-          attachmentName: '',
-          assignedTechnicianIds: [],
-        });
-      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -918,52 +896,46 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     isUpdatingTicketRef.current = true;
     setIsUpdatingTicket(true);
     try {
-      const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ticketModalMode === 'edit' ? {
-          customerName: report.customerName,
-          phone: report.phone,
-          address: report.address,
-          locationUrl: report.locationUrl,
-          package: report.package,
-          issue: report.issue,
-          notes: report.notes,
-          type: report.type,
-          billingEntered: report.billingEntered,
-        } : {
-          status: report.status,
-          report: report.report,
-          technicianNotes: report.technicianNotes,
-          assignedTechnicianIds: report.assignedTechnicianIds,
-          reportAttachmentUrl: report.reportAttachmentUrl,
-          reportAttachmentName: report.reportAttachmentName,
-          billingEntered: canEditTicket ? report.billingEntered : selectedTicket.billingEntered,
-          completedAt: report.status === 'completed' ? (selectedTicket.completedAt || new Date().toISOString()) : undefined
-        })
+      await api.patch(`/tickets/${selectedTicket.id}`, ticketModalMode === 'edit' ? {
+        customerName: report.customerName,
+        phone: report.phone,
+        address: report.address,
+        locationUrl: report.locationUrl,
+        package: report.package,
+        issue: report.issue,
+        notes: report.notes,
+        type: report.type,
+        billingEntered: report.billingEntered,
+      } : {
+        status: report.status,
+        report: report.report,
+        technicianNotes: report.technicianNotes,
+        assignedTechnicianIds: report.assignedTechnicianIds,
+        reportAttachmentUrl: report.reportAttachmentUrl,
+        reportAttachmentName: report.reportAttachmentName,
+        billingEntered: canEditTicket ? report.billingEntered : selectedTicket.billingEntered,
+        completedAt: report.status === 'completed' ? (selectedTicket.completedAt || new Date().toISOString()) : undefined
       });
-      if (res.ok) {
-        setIsReportModalOpen(false);
-        setSelectedTicket(null);
-        setReport({
-          status: 'completed',
-          report: '',
-          technicianNotes: '',
-          assignedTechnicianIds: [],
-          reportAttachmentUrl: '',
-          reportAttachmentName: '',
-          customerName: '',
-          phone: '',
-          address: '',
-          locationUrl: '',
-          package: '',
-          issue: '',
-          notes: '',
-          type: 'installation',
-          billingEntered: false,
-        });
-        onRefresh();
-      }
+      setIsReportModalOpen(false);
+      setSelectedTicket(null);
+      setReport({
+        status: 'completed',
+        report: '',
+        technicianNotes: '',
+        assignedTechnicianIds: [],
+        reportAttachmentUrl: '',
+        reportAttachmentName: '',
+        customerName: '',
+        phone: '',
+        address: '',
+        locationUrl: '',
+        package: '',
+        issue: '',
+        notes: '',
+        type: 'installation',
+        billingEntered: false,
+      });
+      onRefresh();
     } catch (err) {
       console.error(err);
     } finally {
@@ -982,23 +954,15 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     isEditingTicketRef.current = true;
     setIsEditingTicket(true);
     try {
-      const res = await fetch(`/api/tickets/${selectedTicket.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...editTicket,
-          completedAt: editTicket.status === 'completed'
-            ? (selectedTicket.completedAt || new Date().toISOString())
-            : undefined
-        })
+      const patchRes = await api.patch(`/tickets/${selectedTicket.id}`, {
+        ...editTicket,
+        completedAt: editTicket.status === 'completed'
+          ? (selectedTicket.completedAt || new Date().toISOString())
+          : undefined
       });
-
-      if (res.ok) {
-        const updatedTicket = await res.json();
-        setSelectedTicket(updatedTicket);
-        setIsEditTicketModalOpen(false);
-        onRefresh();
-      }
+      setSelectedTicket(patchRes.data?.data ?? patchRes.data);
+      setIsEditTicketModalOpen(false);
+      onRefresh();
     } catch (err) {
       console.error(err);
     } finally {
@@ -1011,10 +975,8 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     e.stopPropagation();
     if (!confirm('Apakah Anda yakin ingin menghapus tiket ini?')) return;
     try {
-      const res = await fetch(`/api/tickets/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        onRefresh();
-      }
+      await api.delete(`/tickets/${id}`);
+      onRefresh();
     } catch (err) {
       console.error(err);
     }
@@ -1381,11 +1343,10 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                               <p className="text-[10px] text-amber-600 mb-3 leading-relaxed">
                                 Link ini mungkin link pendek (goo.gl) atau format tidak standar. Gunakan tool di bawah untuk menerjemahkannya.
                               </p>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="w-full h-8 text-[10px] font-bold bg-white border-amber-200 text-amber-700 hover:bg-amber-100 hover:border-amber-300 transition-all"
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="w-full h-8 text-[10px] font-bold bg-white border-amber-200 text-amber-700 hover:bg-amber-100 hover:border-amber-300 transition-all"
                                 disabled={isResolving}
                                 onClick={async (e) => {
                                   e.preventDefault();
@@ -1527,14 +1488,11 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
                       if (isResendingNotif) return;
                       setIsResendingNotif(true);
                       try {
-                        const res = await fetch(`/api/tickets/${selectedTicket.id}/resend-notification`, {
-                          method: 'POST'
-                        });
-                        const data = await res.json();
-                        if (res.ok) {
+                        const res = await api.post(`/tickets/${selectedTicket.id}/resend-notification`);
+                        if (res.data?.status === 'success') {
                           alert('Notifikasi berhasil dikirim ulang ke Group WhatsApp');
                         } else {
-                          alert(data.message || 'Gagal mengirim notifikasi');
+                          alert(res.data?.message || 'Gagal mengirim notifikasi');
                         }
                       } catch (err) {
                         console.error(err);
@@ -3185,19 +3143,22 @@ function SettingsView({ settings, onRefresh, onSettingsSaved, user }: {
     setSaving(true);
     setSaveMsg('');
     try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form)
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        onSettingsSaved(updated);
-        setSaveMsg('Pengaturan berhasil disimpan!');
-        setTimeout(() => setSaveMsg(''), 3000);
-      } else {
-        setSaveMsg('Gagal menyimpan pengaturan');
-      }
+      const settingMap: Record<string, unknown> = {
+        whatsapp_group: form.whatsappGroup,
+        template_installation: form.templateInstallation,
+        template_maintenance: form.templateMaintenance,
+        template_dismantle: form.templateDismantle,
+        template_closed: form.templateClosed,
+        media_retention_days: String(form.mediaRetentionDays),
+      };
+      await Promise.all(
+        Object.entries(settingMap).map(([key, value]) =>
+          api.patch(`/settings/${key}`, { value })
+        )
+      );
+      onSettingsSaved({ ...form } as AppSettings);
+      setSaveMsg('Pengaturan berhasil disimpan!');
+      setTimeout(() => setSaveMsg(''), 3000);
     } catch {
       setSaveMsg('Error koneksi server');
     } finally {
@@ -3520,6 +3481,16 @@ function SettingsView({ settings, onRefresh, onSettingsSaved, user }: {
         </Card>
       )}
     </div>
+  );
+}
+
+// ── Default export ─────────────────────────────────────────────────────────
+// Wraps AppShell in AuthProvider so the entire app has JWT auth context.
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
   );
 }
 

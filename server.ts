@@ -6,6 +6,10 @@ import axios from "axios";
 import fs from "fs";
 import multer from "multer";
 import { createRequire } from "module";
+// ─── API v1 (JWT + PostgreSQL) ─────────────────────────────────────────────────
+import apiV1 from "./api/v1/index.js";
+// @ts-ignore
+import { setWAClient } from "./services/wa-notify.js";
 const _require = createRequire(import.meta.url);
 const { Client, LocalAuth } = _require("whatsapp-web.js");
 import qrcode from "qrcode";
@@ -54,16 +58,6 @@ const initialData = {
 if (!fs.existsSync(DB_FILE)) {
   fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2));
 }
-
-// Migrate existing db: remove fonnteToken if present
-try {
-  const existing = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-  if (existing.settings && existing.settings.fonnteToken !== undefined) {
-    delete existing.settings.fonnteToken;
-    fs.writeFileSync(DB_FILE, JSON.stringify(existing, null, 2));
-    console.log("[DB] Migrated: removed fonnteToken from settings.");
-  }
-} catch { /* ignore */ }
 
 function getDB() {
   return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
@@ -142,6 +136,8 @@ waClient.on("ready", () => {
       wid: info.wid?.user
     };
   }
+  // Register client with the shared notification service
+  setWAClient(waClient);
   addLog("WA_CONNECTED", "System", `WhatsApp connected as ${waInfo.pushname || waInfo.wid || "unknown"}`);
   // Pre-cache groups via direct Store access (avoids r:r from getChats)
   setTimeout(async () => {
@@ -167,6 +163,8 @@ waClient.on("disconnected", (reason: string) => {
   waInfo = {};
   waGroupsCache = [];
   waGroupsCachedAt = 0;
+  // Clear the shared notification service reference
+  setWAClient(null);
   addLog("WA_DISCONNECTED", "System", `WhatsApp disconnected: ${reason}`);
   // Auto-reinitialize after 10 seconds
   setTimeout(() => {
@@ -205,7 +203,7 @@ async function sendWhatsApp(to: string, message: string) {
 
 // Initialize WA client
 console.log("[WhatsApp] Initializing client...");
-waClient.initialize().catch((err) => {
+waClient.initialize().catch((err: unknown) => {
   console.error("[WhatsApp] Initialization error:", err);
   waStatus = "DISCONNECTED";
 });
@@ -654,7 +652,11 @@ app.post("/api/whatsapp/restart", async (req, res) => {
   }
 });
 
-// ─── API Routes ────────────────────────────────────────────────────────────────
+// ─── API v1 Routes (JWT-protected, PostgreSQL-backed) ──────────────────────────
+// Mount BEFORE the legacy /api routes so /api/v1/* is handled first.
+app.use("/api/v1", apiV1);
+
+// ─── Legacy API Routes (JSON file–backed) ──────────────────────────────────────
 
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
@@ -892,9 +894,7 @@ app.get("/api/settings", (req, res) => {
 
 app.post("/api/settings", (req, res) => {
   const db = getDB();
-  // Never persist fonnteToken (it's removed)
-  const { fonnteToken, ...safeSettings } = req.body;
-  db.settings = { ...db.settings, ...safeSettings };
+  db.settings = { ...db.settings, ...req.body };
   saveDB(db);
   res.json(db.settings);
 });

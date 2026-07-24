@@ -28,6 +28,13 @@ export default defineConfig(({mode}) => {
           '**/data/**',
         ],
       },
+      proxy: {
+        // Forward all /api requests to the Express backend during dev
+        '/api': {
+          target: `http://localhost:${env.PORT || 3001}`,
+          changeOrigin: true,
+        },
+      },
     },
   };
 });
