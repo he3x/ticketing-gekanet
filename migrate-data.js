@@ -303,9 +303,8 @@ async function migrate() {
            id, created_at, completed_at,
            type, status,
            customer_name, address, location_url, phone,
-           issue, package, notes,
-           attachment_url, attachment_name,
-           report, technician_notes, report_attachment_url, report_attachment_name,
+           issue, package_name, notes,
+           report, technician_notes,
            billing_entered
          ) VALUES (
            ?, ?, ?,
@@ -313,7 +312,6 @@ async function migrate() {
            ?, ?, ?, ?,
            ?, ?, ?,
            ?, ?,
-           ?, ?, ?, ?,
            ?
          )`,
         [
@@ -327,18 +325,44 @@ async function migrate() {
           t.locationUrl   || null,
           t.phone         || "",
           t.issue         || null,
-          t.package       || null,
+          t.package       || t.package_name || null,
           t.notes         || null,
-          t.attachmentUrl     || null,
-          t.attachmentName    || null,
           t.report            || null,
           t.technicianNotes   || null,
-          t.reportAttachmentUrl  || null,
-          t.reportAttachmentName || null,
           t.billingEntered ? 1 : 0,
         ],
         `ticket #${ticketId} (${t.customerName || "unknown"})`
       );
+
+      // Migrate attachment_url into ticket_attachments
+      if (t.attachmentUrl || t.attachment_url) {
+        await exec(
+          db,
+          `INSERT INTO ticket_attachments (ticket_id, file_url, file_name, uploaded_at) VALUES (?, ?, ?, ?)`,
+          [
+            ticketId,
+            t.attachmentUrl || t.attachment_url,
+            t.attachmentName || t.attachment_name || "attachment",
+            toTimestamp(t.createdAt) || new Date().toISOString().slice(0,19).replace("T"," ")
+          ],
+          `ticket_attachment (initial)`
+        );
+      }
+      
+      // Migrate report_attachment_url into ticket_attachments
+      if (t.reportAttachmentUrl || t.report_attachment_url) {
+        await exec(
+          db,
+          `INSERT INTO ticket_attachments (ticket_id, file_url, file_name, uploaded_at) VALUES (?, ?, ?, ?)`,
+          [
+            ticketId,
+            t.reportAttachmentUrl || t.report_attachment_url,
+            t.reportAttachmentName || t.report_attachment_name || "report",
+            toTimestamp(t.completedAt) || new Date().toISOString().slice(0,19).replace("T"," ")
+          ],
+          `ticket_attachment (report)`
+        );
+      }
       stats.tickets++;
 
       // ── 2d. Migrate ticket_technicians (junction) ─────────────────────────
@@ -376,78 +400,50 @@ async function migrate() {
 
     // ── 2e. Migrate Settings ─────────────────────────────────────────────────
     log("\n── Step 4/5: Migrating settings …");
-    const settingsUpsert = DRIVER === "pg"
-      ? `INSERT INTO settings (
-           id,
-           whatsapp_group,
-           template_installation, template_maintenance, template_dismantle, template_closed,
-           media_retention_days
-         ) VALUES (1, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET
-           whatsapp_group        = EXCLUDED.whatsapp_group,
-           template_installation = EXCLUDED.template_installation,
-           template_maintenance  = EXCLUDED.template_maintenance,
-           template_dismantle    = EXCLUDED.template_dismantle,
-           template_closed       = EXCLUDED.template_closed,
-           media_retention_days  = EXCLUDED.media_retention_days`
-      : `INSERT INTO settings (
-           id,
-           whatsapp_group,
-           template_installation, template_maintenance, template_dismantle, template_closed,
-           media_retention_days
-         ) VALUES (1, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           whatsapp_group        = VALUES(whatsapp_group),
-           template_installation = VALUES(template_installation),
-           template_maintenance  = VALUES(template_maintenance),
-           template_dismantle    = VALUES(template_dismantle),
-           template_closed       = VALUES(template_closed),
-           media_retention_days  = VALUES(media_retention_days)`;
-    await exec(
-      db,
-      settingsUpsert,
-      [
-        settings.whatsappGroup         || null,
-        settings.templateInstallation  || "",
-        settings.templateMaintenance   || "",
-        settings.templateDismantle     || "",
-        settings.templateClosed        || "",
-        settings.mediaRetentionDays    || 60,
-      ],
-      "settings row"
-    );
+    const settingsMap = {
+      "whatsapp_group": settings.whatsappGroup || null,
+      "template_installation": settings.templateInstallation || "",
+      "template_maintenance": settings.templateMaintenance || "",
+      "template_dismantle": settings.templateDismantle || "",
+      "template_closed": settings.templateClosed || "",
+      "media_retention_days": (settings.mediaRetentionDays || 60).toString()
+    };
+    const settingDesc = {
+      "whatsapp_group": "ID Grup WA",
+      "template_installation": "Template pemasangan",
+      "template_maintenance": "Template maintenance",
+      "template_dismantle": "Template dismantle",
+      "template_closed": "Template closed",
+      "media_retention_days": "Batas retensi"
+    };
+    for (const [sKey, sVal] of Object.entries(settingsMap)) {
+      if (sVal === null || sVal === undefined) continue;
+      const upsertSql = DRIVER === "pg"
+        ? "INSERT INTO settings (key, value, description) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        : "INSERT INTO settings (key, value, description) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)";
+      await exec(db, upsertSql, [sKey, String(sVal), settingDesc[sKey]], `settings row (${sKey})`);
+    }
     stats.settings = 1;
     ok("  Settings migrated.");
 
     // ── 2f. Migrate Logs ─────────────────────────────────────────────────────
     log(`\n── Step 5/5: Migrating ${logs.length} log entries …`);
-    // Logs can have duplicate numeric IDs when log.id = Date.now() collides.
-    // We assign a synthetic sequential ID to avoid PK conflicts.
-    let logIdSeq = BigInt(Date.now()) * 1000n;  // base offset to avoid real collisions
-
+    // Logs schema now uses BIGSERIAL for 'id', so we skip inserting id.
     for (const l of logs) {
-      let logId;
-      try {
-        logId = BigInt(l.id).toString();
-      } catch (_) {
-        logId = (logIdSeq++).toString();
-      }
-
       await exec(
         db,
       DRIVER === "pg"
-        ? `INSERT INTO logs (id, timestamp, action, actor, details)
-           VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`
-        : `INSERT IGNORE INTO logs (id, timestamp, action, actor, details)
-           VALUES (?, ?, ?, ?, ?)`,
+        ? `INSERT INTO logs (timestamp, action, actor, details)
+           VALUES (?, ?, ?, ?)`
+        : `INSERT IGNORE INTO logs (timestamp, action, actor, details)
+           VALUES (?, ?, ?, ?)`,
         [
-          logId,
           toTimestamp(l.timestamp) || new Date().toISOString().slice(0,19).replace("T"," "),
           l.action  || "UNKNOWN",
           l.user    || "System",
           l.details || "",
         ],
-        `log #${logId}`
+        `log entry ${l.action}`
       );
       stats.logs++;
     }
