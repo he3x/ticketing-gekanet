@@ -13,3 +13,6 @@ db.json
 # SQL migration artifacts – ignore local DB dumps but keep schema.sql
 *.sql.bak
 db-dump-*.sql
+
+# db.json backups created by migrate-display-id.js
+db.json.backup.*

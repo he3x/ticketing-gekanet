@@ -13,6 +13,7 @@ export type TicketStatus = 'open' | 'in-progress' | 'completed' | 'cancelled';
 
 export interface Ticket {
   id: string;
+  displayId?: number; // Human-readable sequential ID (1, 2, 3, ...)
   type: TicketType;
   status: TicketStatus;
   customerName: string;

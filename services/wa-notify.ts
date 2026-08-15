@@ -152,7 +152,8 @@ export async function sendNewTicketNotification(
       ? `\nLokasi: ${ticket.location_url}` 
       : "";
     
-    const ticketLink = buildTicketLink(ticket.id);
+    // Use external_id (human-readable) in the link so it matches the displayed ID
+    const ticketLink = buildTicketLink(ticket.external_id ?? ticket.id);
 
     // Replace template variables
     const message = template
@@ -211,7 +212,8 @@ export async function sendTicketClosedNotification(
       ? `\nLokasi: ${ticket.location_url}` 
       : "";
     
-    const ticketLink = buildTicketLink(ticket.id);
+    // Use external_id (human-readable) in the link so it matches the displayed ID
+    const ticketLink = buildTicketLink(ticket.external_id ?? ticket.id);
 
     // Replace template variables
     const message = template

@@ -772,7 +772,10 @@ function TicketsView({ tickets, user, users, onRefresh, showClosed = false }: { 
     const params = new URLSearchParams(window.location.search);
     const ticketId = params.get('ticketId');
     if (ticketId && tickets.length > 0) {
-      const ticket = tickets.find(t => t.id === ticketId);
+      // Search by displayId / externalId first (human-readable), then fall back to internal id
+      const ticket = tickets.find(t => String(t.displayId) === ticketId)
+        || tickets.find(t => String((t as any).externalId) === ticketId)
+        || tickets.find(t => t.id === ticketId);
       if (ticket) {
         setSelectedTicket(ticket);
         // Clear the URL param so it doesn't reopen on refresh if the user closes it

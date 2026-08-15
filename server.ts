@@ -44,6 +44,7 @@ const initialData = {
     { id: "7", username: "superadmin", password: "password", role: "superuser", name: "Super Admin" },
   ],
   tickets: [],
+  nextDisplayId: 1, // Counter for human-readable ticket IDs
   settings: {
     whatsappGroup: "",
     templateInstallation: "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}\nTeknisi: {technician}{location}{link}",
@@ -214,7 +215,9 @@ function formatMessage(template: string, ticket: any, db: any, origin?: string) 
   const detailLabel = ticket.type === "maintenance" ? `Kendala: ${ticket.issue}` : ticket.type === "dismantle" ? `Alasan: ${ticket.issue}` : `Paket: ${ticket.package}`;
   const locationMsg = ticket.locationUrl ? `\nLokasi: ${ticket.locationUrl}` : "";
   
-  const ticketLink = origin ? `\nLink Tiket: ${origin}/?ticketId=${ticket.id}` : "";
+  // Use displayId for both display and link so they match
+  const displayId = ticket.displayId || ticket.id;
+  const ticketLink = origin ? `\nLink Tiket: ${origin}/?ticketId=${displayId}` : "";
   
   // Resolve technician names
   let techNames = "";
@@ -248,7 +251,7 @@ function formatMessage(template: string, ticket: any, db: any, origin?: string) 
 
   return template
     .replace(/{type}/g, typeLabel)
-    .replace(/{id}/g, ticket.id || "")
+    .replace(/{id}/g, String(displayId))
     .replace(/{customerName}/g, ticket.customerName || "")
     .replace(/{address}/g, ticket.address || "")
     .replace(/{detail}/g, detailLabel)
@@ -704,16 +707,26 @@ app.post("/api/tickets", async (req, res) => {
     locationUrl = await resolveUrl(locationUrl);
   }
 
+  // Initialize nextDisplayId if it doesn't exist (for backward compatibility)
+  if (!db.nextDisplayId) {
+    db.nextDisplayId = db.tickets.length + 1;
+  }
+
   const newTicket = {
     id: Date.now().toString(),
+    displayId: db.nextDisplayId,
     createdAt: new Date().toISOString(),
     status: "open",
     ...req.body,
     locationUrl
   };
+  
+  // Increment the display ID counter
+  db.nextDisplayId++;
+  
   db.tickets.push(newTicket);
   saveDB(db);
-  addLog("TICKET_CREATE", req.body.createdBy || "System", `Created ticket for ${newTicket.customerName}`);
+  addLog("TICKET_CREATE", req.body.createdBy || "System", `Created ticket #${newTicket.displayId} for ${newTicket.customerName}`);
 
   const template = newTicket.type === "maintenance" 
     ? (db.settings.templateMaintenance || "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}")
@@ -756,10 +769,10 @@ app.post("/api/tickets/:id/resend-notification", async (req, res) => {
   }
 
   const template = ticket.type === "maintenance"
-    ? (db.settings.templateMaintenance || "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}")
+    ? (db.settings.templateMaintenance || "Tiket Maintenance Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nKendala: {detail}\nTeknisi: {technician}{location}{link}")
     : ticket.type === "dismantle"
-    ? (db.settings.templateDismantle || "Tiket Dismantle Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nAlasan: {detail}")
-    : (db.settings.templateInstallation || "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}");
+    ? (db.settings.templateDismantle || "Tiket Dismantle Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nAlasan: {detail}\nTeknisi: {technician}{location}{link}")
+    : (db.settings.templateInstallation || "Tiket Pemasangan Baru!\nID: {id}\nPelanggan: {customerName}\nAlamat: {address}\nPaket: {detail}\nTeknisi: {technician}{location}{link}");
     
   const message = `[REMINDER] ${formatMessage(template, ticket, db, req.headers.origin)}`;
 
